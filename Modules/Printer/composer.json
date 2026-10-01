@@ -1,0 +1,16 @@
+{
+    "name": "nexdine/printer",
+    "description": "",
+    "authors": [
+        {
+            "name": "Tenvoro",
+            "email": "tenvoro@gmail.com"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "Modules\\Printer\\": "app/",
+            "Modules\\Printer\\Database\\Seeders\\": "database/seeders/"
+        }
+    }
+}

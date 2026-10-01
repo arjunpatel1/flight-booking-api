@@ -1,0 +1,223 @@
+{
+  "info": {
+    "name": "NexDine POS — Session Features",
+    "description": "Endpoints added in this session: Split bill, Complimentary bill, Aggregator item-availability (86), KDS recall, Loyalty points adjustment.\n\nUsage:\n1. Set the `base_url` and login credentials in the collection/environment variables.\n2. Run **Auth › Login** first — it stores the bearer token in `{{token}}`.\n3. Set the resource id variables (`order_id`, `item_id`, etc.) from your data.\n\nEach request includes happy-path and negative (\"bad\") assertions via the Tests tab. Run the whole collection with Newman:\n`newman run NexDine-Session-Features.postman_collection.json -e NexDine.postman_environment.json`",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://127.0.0.1:8000/api/v1" },
+    { "key": "identifier", "value": "" },
+    { "key": "password", "value": "" },
+    { "key": "token", "value": "" },
+    { "key": "order_id", "value": "1" },
+    { "key": "order_product_id", "value": "1" },
+    { "key": "order_product_id_2", "value": "2" },
+    { "key": "station_id", "value": "1" },
+    { "key": "kitchen_item_id", "value": "1" },
+    { "key": "integration_id", "value": "1" },
+    { "key": "loyalty_customer_id", "value": "1" },
+    { "key": "product_id", "value": "1" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }]
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login (stores token)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('login ok', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json().body || {};",
+                  "if (body.token) { pm.collectionVariables.set('token', body.token); }",
+                  "pm.test('token returned', () => pm.expect(body.token, 'body.token').to.be.a('string'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"identifier\": \"{{identifier}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{base_url}}/auth/login", "host": ["{{base_url}}"], "path": ["auth", "login"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Billing — Split Bill",
+      "item": [
+        {
+          "name": "Split bill (happy)",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('201 created', () => pm.response.to.have.status(201));",
+              "const b = pm.response.json().body || {};",
+              "pm.test('parent + child returned', () => { pm.expect(b).to.have.property('parent'); pm.expect(b).to.have.property('child'); });"
+            ] } } ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"items\": [{{order_product_id_2}}]\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{base_url}}/orders/{{order_id}}/split", "host": ["{{base_url}}"], "path": ["orders", "{{order_id}}", "split"] }
+          }
+        },
+        {
+          "name": "BAD — empty items (422)",
+          "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('422 validation', () => pm.response.to.have.status(422));"
+          ] } } ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Accept", "value": "application/json" }, { "key": "Idempotency-Key", "value": "{{$guid}}" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"items\": []\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{base_url}}/orders/{{order_id}}/split", "host": ["{{base_url}}"], "path": ["orders", "{{order_id}}", "split"] }
+          }
+        },
+        {
+          "name": "BAD — non-existent item (422)",
+          "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('422 validation', () => pm.response.to.have.status(422));"
+          ] } } ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Accept", "value": "application/json" }, { "key": "Idempotency-Key", "value": "{{$guid}}" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"items\": [999999999]\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{base_url}}/orders/{{order_id}}/split", "host": ["{{base_url}}"], "path": ["orders", "{{order_id}}", "split"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Billing — Complimentary",
+      "item": [
+        {
+          "name": "Complimentary bill (happy)",
+          "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('200/201', () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));"
+          ] } } ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Accept", "value": "application/json" }, { "key": "Idempotency-Key", "value": "{{$guid}}" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"order_id\": {{order_id}},\n  \"reason\": \"Owner comp - VIP guest\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{base_url}}/payments/complimentary", "host": ["{{base_url}}"], "path": ["payments", "complimentary"] }
+          }
+        },
+        {
+          "name": "BAD — missing reason (422)",
+          "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('422 validation', () => pm.response.to.have.status(422));"
+          ] } } ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Accept", "value": "application/json" }, { "key": "Idempotency-Key", "value": "{{$guid}}" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"order_id\": {{order_id}}\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{base_url}}/payments/complimentary", "host": ["{{base_url}}"], "path": ["payments", "complimentary"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Aggregator — Item Availability (86)",
+      "item": [
+        {
+          "name": "Push availability (happy)",
+          "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('200', () => pm.response.to.have.status(200));",
+            "const b = pm.response.json().body || {};",
+            "pm.test('sync log id', () => pm.expect(b).to.have.property('sync_log_id'));"
+          ] } } ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Accept", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"items\": [\n    { \"product_id\": {{product_id}}, \"available\": false },\n    { \"product_id\": {{product_id}}, \"available\": true }\n  ]\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{base_url}}/aggregator-integrations/{{integration_id}}/item-availability", "host": ["{{base_url}}"], "path": ["aggregator-integrations", "{{integration_id}}", "item-availability"] }
+          }
+        },
+        {
+          "name": "BAD — empty items (422)",
+          "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('422 validation', () => pm.response.to.have.status(422));"
+          ] } } ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Accept", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"items\": []\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{base_url}}/aggregator-integrations/{{integration_id}}/item-availability", "host": ["{{base_url}}"], "path": ["aggregator-integrations", "{{integration_id}}", "item-availability"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "KDS — Recall",
+      "item": [
+        {
+          "name": "Recall item (happy)",
+          "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('200', () => pm.response.to.have.status(200));"
+          ] } } ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Accept", "value": "application/json" } ],
+            "url": { "raw": "{{base_url}}/pos/kitchen-stations/{{station_id}}/items/{{kitchen_item_id}}/recall", "host": ["{{base_url}}"], "path": ["pos", "kitchen-stations", "{{station_id}}", "items", "{{kitchen_item_id}}", "recall"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Loyalty — Adjust Points",
+      "item": [
+        {
+          "name": "Credit points (happy)",
+          "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('200', () => pm.response.to.have.status(200));",
+            "const b = pm.response.json().body || {};",
+            "pm.test('balance returned', () => pm.expect(b).to.have.property('points_balance'));"
+          ] } } ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Accept", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"points\": 100,\n  \"reason\": \"Goodwill gesture\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{base_url}}/loyalty-customers/{{loyalty_customer_id}}/adjust-points", "host": ["{{base_url}}"], "path": ["loyalty-customers", "{{loyalty_customer_id}}", "adjust-points"] }
+          }
+        },
+        {
+          "name": "Debit points (happy)",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Accept", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"points\": -30,\n  \"reason\": \"Correction\"\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{base_url}}/loyalty-customers/{{loyalty_customer_id}}/adjust-points", "host": ["{{base_url}}"], "path": ["loyalty-customers", "{{loyalty_customer_id}}", "adjust-points"] }
+          }
+        },
+        {
+          "name": "BAD — zero points (422)",
+          "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('422 validation', () => pm.response.to.have.status(422));"
+          ] } } ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Accept", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"points\": 0\n}", "options": { "raw": { "language": "json" } } },
+            "url": { "raw": "{{base_url}}/loyalty-customers/{{loyalty_customer_id}}/adjust-points", "host": ["{{base_url}}"], "path": ["loyalty-customers", "{{loyalty_customer_id}}", "adjust-points"] }
+          }
+        }
+      ]
+    }
+  ]
+}

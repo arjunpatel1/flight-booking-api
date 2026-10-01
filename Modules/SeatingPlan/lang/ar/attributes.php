@@ -1,0 +1,70 @@
+<?php
+
+return [
+    'floors' => [
+        'name' => 'الطابق',
+        'branch_id' => 'الفرع',
+        'layout_width' => 'عرض المساحة',
+        'layout_height' => 'ارتفاع المساحة',
+        'show_grid' => 'خطوط الشبكة',
+        'show_guide_lines' => 'خطوط الإرشاد',
+        'show_zone_labels' => 'نص المنطقة',
+        'show_table_labels' => 'نص الطاولة',
+        'compact_tables' => 'طاولات مضغوطة',
+        'zone_layouts' => 'تخطيطات المناطق',
+        'layout_elements' => 'عناصر الخريطة',
+        'is_active' => 'نشط',
+    ],
+    'zones' => [
+        'name' => 'الاسم',
+        'branch_id' => 'الفرع',
+        'floor_id' => 'الطابق',
+        'price_type_id' => 'نوع السعر',
+        'is_active' => 'نشط',
+    ],
+    'tables' => [
+        'name' => 'الاسم',
+        'branch_id' => 'الفرع',
+        'floor_id' => 'الطابق',
+        'zone_id' => 'المنطقة',
+        'capacity' => 'السعة',
+        'shape' => 'الشكل',
+        'pos_x' => 'موضع X',
+        'pos_y' => 'موضع Y',
+        'rotation' => 'الدوران',
+        'scale' => 'المقياس',
+        'is_active' => 'نشط',
+        'waiter_id' => 'النادل',
+        'guest_count' => 'عدد الضيوف',
+        'selected_seats' => 'المقاعد المختارة',
+        'status_id' => 'الحالة',
+    ],
+
+    'table_merges' => [
+        'table_ids' => 'الطاولات',
+        'table_ids.*' => 'الطاولة',
+        'type' => 'نوع الدمج',
+    ],
+
+    'table_transfers' => [
+        'target_table_id' => 'الطاولة الهدف',
+    ],
+
+    'reservations' => [
+        'booking_type' => 'نوع الحجز',
+        'branch_id' => 'الفرع',
+        'table_id' => 'الطاولة',
+        'hall_name' => 'اسم القاعة',
+        'event_title' => 'عنوان المناسبة',
+        'customer_name' => 'اسم العميل',
+        'customer_phone' => 'هاتف العميل',
+        'customer_email' => 'بريد العميل',
+        'guest_count' => 'عدد الضيوف',
+        'reservation_date' => 'تاريخ الحجز',
+        'reservation_time' => 'وقت الحجز',
+        'duration_minutes' => 'المدة',
+        'deposit_amount' => 'مبلغ العربون',
+        'special_requests' => 'طلبات خاصة',
+        'reason' => 'السبب',
+    ],
+];

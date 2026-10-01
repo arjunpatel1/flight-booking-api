@@ -1,0 +1,105 @@
+{
+  "info": {
+    "name": "NexDine Partner API v1",
+    "description": "Signed, branch-scoped NexDine Partner API examples. Set api_key and api_secret in the environment after issuing a sandbox credential.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": { "type": "noauth" },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "const apiKey = pm.environment.get('api_key');",
+          "const secret = pm.environment.get('api_secret');",
+          "if (!apiKey || !secret) throw new Error('Set api_key and api_secret in the selected environment.');",
+          "const timestamp = String(Math.floor(Date.now() / 1000));",
+          "const nonce = pm.variables.replaceIn('{{$guid}}').replace(/-/g, '') + Date.now();",
+          "const body = pm.request.body && pm.request.body.mode === 'raw' ? pm.variables.replaceIn(pm.request.body.raw || '') : '';",
+          "const path = '/' + pm.request.url.path.map(part => pm.variables.replaceIn(part)).join('/');",
+          "const rawQuery = (pm.variables.replaceIn(pm.request.url.toString()).split('?')[1] || '').split('#')[0];",
+          "const decode = value => decodeURIComponent(value.replace(/\\+/g, ' '));",
+          "const encode = value => encodeURIComponent(value).replace(/[!'()*]/g, char => '%' + char.charCodeAt(0).toString(16).toUpperCase());",
+          "const pairs = rawQuery.split('&').filter(Boolean).map(part => { const split = part.indexOf('='); return split < 0 ? [decode(part), ''] : [decode(part.slice(0, split)), decode(part.slice(split + 1))]; });",
+          "pairs.sort((a, b) => a[0] === b[0] ? (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0) : (a[0] < b[0] ? -1 : 1));",
+          "const target = path + (pairs.length ? '?' + pairs.map(pair => encode(pair[0]) + '=' + encode(pair[1])).join('&') : '');",
+          "const bodyHash = CryptoJS.SHA256(body).toString(CryptoJS.enc.Hex);",
+          "const canonical = [pm.request.method.toUpperCase(), target, timestamp, nonce, bodyHash].join('\\n');",
+          "const signature = CryptoJS.HmacSHA256(canonical, secret).toString(CryptoJS.enc.Hex);",
+          "pm.request.headers.upsert({ key: 'X-Api-Key', value: apiKey });",
+          "pm.request.headers.upsert({ key: 'X-Timestamp', value: timestamp });",
+          "pm.request.headers.upsert({ key: 'X-Nonce', value: nonce });",
+          "pm.request.headers.upsert({ key: 'X-Signature', value: signature });",
+          "pm.request.headers.upsert({ key: 'Accept', value: 'application/json' });"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Authentication",
+      "item": [
+        {
+          "name": "Signed Health Check",
+          "request": { "method": "GET", "url": "{{base_url}}/api/v1/partner/health", "description": "Verifies API key, signature, timestamp, nonce, IP policy and credential state." },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Authenticated', () => pm.response.to.have.status(200));"] } }]
+        }
+      ]
+    },
+    {
+      "name": "Catalog",
+      "item": [
+        {
+          "name": "List Branches",
+          "request": { "method": "GET", "url": "{{base_url}}/api/v1/partner/branches" },
+          "event": [{ "listen": "test", "script": { "exec": ["const json = pm.response.json();", "if (json.data && json.data[0]) pm.environment.set('branch_uuid', json.data[0].id);"] } }]
+        },
+        {
+          "name": "List Branch Menus",
+          "request": { "method": "GET", "url": "{{base_url}}/api/v1/partner/branches/{{branch_uuid}}/menus" },
+          "event": [{ "listen": "test", "script": { "exec": ["const json = pm.response.json();", "if (json.data && json.data[0]) pm.environment.set('menu_uuid', json.data[0].id);"] } }]
+        },
+        {
+          "name": "List Menu Products",
+          "request": { "method": "GET", "url": { "raw": "{{base_url}}/api/v1/partner/menus/{{menu_uuid}}/products?page=1&per_page=50", "host": ["{{base_url}}"], "path": ["api", "v1", "partner", "menus", "{{menu_uuid}}", "products"], "query": [{ "key": "page", "value": "1" }, { "key": "per_page", "value": "50" }] } }
+        }
+      ]
+    },
+    {
+      "name": "Driver delivery",
+      "description": "Partner-owned deliveries only. Requires deliveries:read or deliveries:status scope. Status updates are manual local tests and require verified full order payment and kitchen readiness.",
+      "item": [
+        {
+          "name": "Get partner delivery",
+          "request": { "method": "GET", "url": "{{base_url}}/api/v1/partner/deliveries/{{partner_order_uuid}}" }
+        },
+        {
+          "name": "Assign rider — manual local test",
+          "event": [{ "listen": "prerequest", "script": { "exec": ["if (pm.environment.get('allow_delivery_mutations') !== 'true' || !/^https?:\\/\\/(127\\.0\\.0\\.1|localhost)(:\\d+)?$/.test(pm.environment.get('base_url') || '')) pm.execution.skipRequest();"] } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Idempotency-Key", "value": "{{$guid}}" }],
+            "body": { "mode": "raw", "raw": "{\"status\":\"rider_assigned\",\"rider_name\":\"Local Test Rider\"}", "options": { "raw": { "language": "json" } } },
+            "url": "{{base_url}}/api/v1/partner/deliveries/{{partner_order_uuid}}/status",
+            "description": "Allowed next statuses include arrived_at_pickup, picked_up, in_transit, arrived_at_customer, delivered. Send each transition separately with a new Idempotency-Key. The server rejects invalid or out-of-order transitions."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Negative Security Tests",
+      "item": [
+        {
+          "name": "Invalid Signature",
+          "event": [{ "listen": "prerequest", "script": { "exec": ["pm.request.headers.upsert({ key: 'X-Signature', value: '0000000000000000000000000000000000000000000000000000000000000000' });"] } }],
+          "request": { "method": "GET", "url": "{{base_url}}/api/v1/partner/health" }
+        },
+        {
+          "name": "Unknown Branch UUID",
+          "request": { "method": "GET", "url": "{{base_url}}/api/v1/partner/branches/00000000-0000-4000-8000-000000000000/menus" }
+        }
+      ]
+    }
+  ]
+}

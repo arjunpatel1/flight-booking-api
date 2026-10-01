@@ -1,0 +1,70 @@
+<?php
+
+return [
+    'floors' => [
+        'name' => 'Floor',
+        'branch_id' => 'Branch',
+        'layout_width' => 'Area Width',
+        'layout_height' => 'Area Height',
+        'show_grid' => 'Grid Lines',
+        'show_guide_lines' => 'Guide Lines',
+        'show_zone_labels' => 'Zone Text',
+        'show_table_labels' => 'Table Text',
+        'compact_tables' => 'Compact Tables',
+        'zone_layouts' => 'Zone Layouts',
+        'layout_elements' => 'Map Elements',
+        'is_active' => 'Active',
+    ],
+    'zones' => [
+        'name' => 'Name',
+        'branch_id' => 'Branch',
+        'floor_id' => 'Floor',
+        'price_type_id' => 'Price Type',
+        'is_active' => 'Active',
+    ],
+    'tables' => [
+        'name' => 'Name',
+        'branch_id' => 'Branch',
+        'floor_id' => 'Floor',
+        'zone_id' => 'Zone',
+        'capacity' => 'Capacity',
+        'shape' => 'Shape',
+        'pos_x' => 'X Position',
+        'pos_y' => 'Y Position',
+        'rotation' => 'Rotation',
+        'scale' => 'Scale',
+        'is_active' => 'Active',
+        'waiter_id' => 'Waiter',
+        'guest_count' => 'Guest Count',
+        'selected_seats' => 'Selected Seats',
+        'status_id' => 'Status',
+    ],
+
+    'table_merges' => [
+        'table_ids' => 'Tables',
+        'table_ids.*' => 'Table',
+        'type' => 'Merge Type',
+    ],
+
+    'table_transfers' => [
+        'target_table_id' => 'Target Table',
+    ],
+
+    'reservations' => [
+        'booking_type' => 'Booking Type',
+        'branch_id' => 'Branch',
+        'table_id' => 'Table',
+        'hall_name' => 'Hall Name',
+        'event_title' => 'Event Title',
+        'customer_name' => 'Customer Name',
+        'customer_phone' => 'Customer Phone',
+        'customer_email' => 'Customer Email',
+        'guest_count' => 'Guest Count',
+        'reservation_date' => 'Reservation Date',
+        'reservation_time' => 'Reservation Time',
+        'duration_minutes' => 'Duration',
+        'deposit_amount' => 'Deposit Amount',
+        'special_requests' => 'Special Requests',
+        'reason' => 'Reason',
+    ],
+];

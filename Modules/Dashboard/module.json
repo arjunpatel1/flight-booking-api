@@ -1,0 +1,11 @@
+{
+    "name": "Dashboard",
+    "alias": "dashboard",
+    "description": "",
+    "keywords": [],
+    "priority": 200,
+    "providers": [
+        "Modules\\Dashboard\\Providers\\DeferredDashboardServiceProvider"
+    ],
+    "files": []
+}

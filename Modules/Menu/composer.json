@@ -1,0 +1,17 @@
+{
+    "name": "nexdine/menu",
+    "description": "",
+    "authors": [
+        {
+            "name": "Tenvoro",
+            "email": "tenvoro@gmail.com"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "Modules\\Menu\\": "app/",
+            "Modules\\Menu\\Database\\Factories\\": "database/factories/",
+            "Modules\\Menu\\Database\\Seeders\\": "database/seeders/"
+        }
+    }
+}

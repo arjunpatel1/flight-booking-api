@@ -1,0 +1,11 @@
+{
+    "name": "Pricing",
+    "alias": "pricing",
+    "description": "",
+    "keywords": [],
+    "priority": 115,
+    "providers": [
+        "Modules\\Pricing\\Providers\\DeferredPricingServiceProvider"
+    ],
+    "files": []
+}

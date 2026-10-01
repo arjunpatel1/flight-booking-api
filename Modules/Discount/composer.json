@@ -1,0 +1,17 @@
+{
+    "name": "nexdine/discount",
+    "description": "",
+    "authors": [
+        {
+            "name": "Tenvoro",
+            "email": "info@tenvoro.dev"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "Modules\\Discount\\": "app/",
+            "Modules\\Discount\\Database\\Factories\\": "database/factories/",
+            "Modules\\Discount\\Database\\Seeders\\": "database/seeders/"
+        }
+    }
+}

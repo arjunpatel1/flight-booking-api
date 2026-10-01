@@ -1,0 +1,17 @@
+{
+    "name": "nexdine/branch",
+    "description": "",
+    "authors": [
+        {
+            "name": "Tenvoro",
+            "email": "tenvoro@gmail.com"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "Modules\\Branch\\": "app/",
+            "Modules\\Branch\\Database\\Factories\\": "database/factories/",
+            "Modules\\Branch\\Database\\Seeders\\": "database/seeders/"
+        }
+    }
+}

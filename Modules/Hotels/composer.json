@@ -1,0 +1,30 @@
+{
+    "name": "nexdine/hotels",
+    "description": "",
+    "authors": [
+        {
+            "name": "Tenvoro",
+            "email": "info@tenvoro.dev"
+        }
+    ],
+    "extra": {
+        "laravel": {
+            "providers": [],
+            "aliases": {
+
+            }
+        }
+    },
+    "autoload": {
+        "psr-4": {
+            "Modules\\Hotels\\": "app/",
+            "Modules\\Hotels\\Database\\Factories\\": "database/factories/",
+            "Modules\\Hotels\\Database\\Seeders\\": "database/seeders/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Modules\\Hotels\\Tests\\": "tests/"
+        }
+    }
+}

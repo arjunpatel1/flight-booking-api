@@ -1,0 +1,11 @@
+{
+    "name": "Voucher",
+    "alias": "voucher",
+    "description": "",
+    "keywords": [],
+    "priority": 170,
+    "providers": [
+        "Modules\\Voucher\\Providers\\DeferredVoucherServiceProvider"
+    ],
+    "files": []
+}

@@ -1,0 +1,26 @@
+<?php
+
+return [
+    'order_completed' => 'Points earned from completing order #:id.',
+    'promotion_applied' => 'Bonus points from promotion #:id.',
+    'points_expired' => 'Points expired from transaction #:id.',
+    'gift_created' => 'A new gift #:gift_id has been created from your redemption.',
+    'gift_used' => 'Gift #:gift_id has been successfully used.',
+    'gift_expired' => 'Gift #:gift_id has expired.',
+    'insufficient_points' => 'You do not have enough loyalty points to redeem this reward.',
+    'reward_usage_limit' => 'This reward is no longer available because it has reached its total redemption limit.',
+    'reward_customer_limit' => 'You have reached your personal redemption limit for this reward.',
+    'gift_not_available' => 'This gift is no longer available or has already been used.',
+    'gift_not_valid_today' => 'This gift cannot be used today. Please check the available days.',
+    'gift_not_valid_branch' => 'This gift is not valid for use at the selected branch.',
+    'gift_min_spend' => 'Your order does not meet the minimum spend required to use this gift.',
+    'points_redeemed' => 'You have redeemed :points loyalty points for reward #:reward_id.',
+    'redeemed_successfully' => 'You have successfully redeemed your reward. Enjoy your gift!',
+    'gift_unavailable' => 'Gift unavailable — unable to apply this reward to your cart.',
+    'gift_rollback' => 'Gift #:gift_id has been successfully rolled back.',
+    'reward_not_available_today' => 'This reward is not available today.',
+    'reward_not_available_in_branch' => 'This reward is not available in this branch.',
+    'reward_minimum_spend_not_met' => 'You have not reached the minimum spend required for this reward.',
+    'adjust_points_non_zero' => 'Enter a non-zero number of points to adjust.',
+    'adjust_points_insufficient' => 'The customer does not have enough points for this deduction.',
+];

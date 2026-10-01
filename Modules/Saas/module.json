@@ -1,0 +1,13 @@
+{
+    "name": "Saas",
+    "alias": "saas",
+    "description": "Commercial SaaS and franchise management foundation.",
+    "keywords": [],
+    "priority": 180,
+    "providers": [
+        "Modules\\Saas\\Providers\\DeferredSaasServiceProvider",
+        "Modules\\Saas\\Providers\\SaasConsoleServiceProvider",
+        "Modules\\Saas\\Providers\\SaasRuntimeServiceProvider"
+    ],
+    "files": []
+}

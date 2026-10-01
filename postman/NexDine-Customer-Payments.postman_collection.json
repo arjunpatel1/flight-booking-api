@@ -1,0 +1,16 @@
+{
+  "info": { "name": "NexDine Customer Payments", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json" },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8000/api/v1" },
+    { "key": "customer_token", "value": "" },
+    { "key": "branch_id", "value": "1" },
+    { "key": "order_reference", "value": "ORD-REPLACE_WITH_REFERENCE" },
+    { "key": "payment_session", "value": "" }
+  ],
+  "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{customer_token}}", "type": "string" }] },
+  "item": [
+    { "name": "Available checkout methods", "request": { "method": "GET", "url": "{{base_url}}/customer-app/payments/options?branch_id={{branch_id}}" } },
+    { "name": "Create Razorpay session", "request": { "method": "POST", "header": [{ "key": "Idempotency-Key", "value": "{{$guid}}" }, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"order_reference\": \"{{order_reference}}\"\n}" }, "url": "{{base_url}}/customer-app/payments/razorpay/sessions" } },
+    { "name": "Verify Razorpay payment", "request": { "method": "POST", "header": [{ "key": "Idempotency-Key", "value": "{{$guid}}" }, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"razorpay_payment_id\": \"pay_replace\",\n  \"razorpay_order_id\": \"order_replace\",\n  \"razorpay_signature\": \"replace_with_64_character_signature\"\n}" }, "url": "{{base_url}}/customer-app/payments/razorpay/sessions/{{payment_session}}/verify" } }
+  ]
+}

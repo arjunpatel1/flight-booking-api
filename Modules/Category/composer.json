@@ -1,0 +1,19 @@
+{
+    "name": "nexdine/category",
+    "description": "",
+    "authors": [
+        {
+            "name": "Tenvoro",
+            "email": "tenvoro@gmail.com"
+        }
+    ],
+    "require": {
+        "kalnoy/nestedset": "^6.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Modules\\Category\\": "app/",
+            "Modules\\Category\\Database\\Seeders\\": "database/seeders/"
+        }
+    }
+}

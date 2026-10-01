@@ -1,0 +1,12 @@
+{
+    "name": "Aggregator",
+    "alias": "aggregator",
+    "description": "",
+    "keywords": [],
+    "priority": 170,
+    "providers": [
+        "Modules\\Aggregator\\Providers\\EventServiceProvider",
+        "Modules\\Aggregator\\Providers\\DeferredAggregatorServiceProvider"
+    ],
+    "files": []
+}

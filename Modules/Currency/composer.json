@@ -1,0 +1,19 @@
+{
+    "name": "nexdine/currency",
+    "description": "",
+    "authors": [
+        {
+            "name": "Tenvoro",
+            "email": "tenvoro@gmail.com"
+        }
+    ],
+    "require": {
+        "florianv/swap": "^4.3"
+    },
+    "autoload": {
+        "psr-4": {
+            "Modules\\Currency\\": "app/",
+            "Modules\\Currency\\Database\\Seeders\\": "database/seeders/"
+        }
+    }
+}

@@ -1,0 +1,45 @@
+<?php
+
+return [
+    'preview' => 'Preview Payroll',
+    'generate' => 'Generate Payroll Run',
+    'approve' => 'Approve',
+    'export' => 'Statutory Export',
+    'runs' => 'Payroll Runs',
+    'empty_preview' => 'No closed attendance records found for this period.',
+    'select_branch' => 'Select Branch',
+    'generated' => 'Payroll run generated successfully.',
+    'approved' => 'Payroll run approved successfully.',
+    'export_ready' => 'Statutory export is ready.',
+    'statuses' => [
+        'draft' => 'Draft',
+        'approved' => 'Approved',
+        'paid' => 'Paid',
+        'cancelled' => 'Cancelled',
+    ],
+    'summary' => [
+        'employees' => 'Employees',
+        'worked_hours' => 'Worked Hours',
+        'overtime_hours' => 'Overtime Hours',
+        'gross_amount' => 'Gross Amount',
+        'deduction_amount' => 'Deductions',
+        'net_amount' => 'Net Amount',
+    ],
+    'filters' => [
+        'from' => 'From',
+        'to' => 'To',
+    ],
+    'table' => [
+        'employee' => 'Employee',
+        'pay_type' => 'Pay Type',
+        'worked_minutes' => 'Worked Minutes',
+        'overtime_minutes' => 'Overtime Minutes',
+        'base_amount' => 'Base Amount',
+        'overtime_amount' => 'Overtime Amount',
+        'gross_amount' => 'Gross Amount',
+        'deduction_amount' => 'Deductions',
+        'net_amount' => 'Net Amount',
+        'status' => 'Status',
+        'period' => 'Period',
+    ],
+];

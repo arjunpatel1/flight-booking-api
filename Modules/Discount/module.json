@@ -1,0 +1,11 @@
+{
+    "name": "Discount",
+    "alias": "discount",
+    "description": "",
+    "keywords": [],
+    "priority": 170,
+    "providers": [
+        "Modules\\Discount\\Providers\\DeferredDiscountServiceProvider"
+    ],
+    "files": []
+}

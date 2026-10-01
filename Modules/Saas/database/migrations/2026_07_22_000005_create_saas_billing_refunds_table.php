@@ -1,0 +1,3 @@
+<?php
+use Illuminate\Database\Migrations\Migration; use Illuminate\Database\Schema\Blueprint; use Illuminate\Support\Facades\Schema;
+return new class extends Migration { public function up():void { Schema::create('saas_billing_refunds',function(Blueprint $t){$t->id();$t->foreignId('saas_billing_invoice_id')->constrained('saas_billing_invoices')->cascadeOnDelete();$t->decimal('amount',12,2);$t->string('currency',3);$t->string('status',30)->default('processed');$t->string('gateway_reference')->nullable();$t->text('reason');$t->foreignId('created_by')->nullable()->constrained('users')->nullOnDelete();$t->timestamps();}); } public function down():void {Schema::dropIfExists('saas_billing_refunds');} };

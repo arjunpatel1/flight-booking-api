@@ -1,0 +1,17 @@
+{
+    "name": "nexdine/voucher",
+    "description": "",
+    "authors": [
+        {
+            "name": "Tenvoro",
+            "email": "info@tenvoro.dev"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "Modules\\Voucher\\": "app/",
+            "Modules\\Voucher\\Database\\Factories\\": "database/factories/",
+            "Modules\\Voucher\\Database\\Seeders\\": "database/seeders/"
+        }
+    }
+}

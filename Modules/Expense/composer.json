@@ -1,0 +1,17 @@
+{
+    "name": "nexdine/expense",
+    "description": "",
+    "authors": [
+        {
+            "name": "Tenvoro",
+            "email": "info@tenvoro.dev"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "Modules\\Expense\\": "app/",
+            "Modules\\Expense\\Database\\Factories\\": "database/factories/",
+            "Modules\\Expense\\Database\\Seeders\\": "database/seeders/"
+        }
+    }
+}

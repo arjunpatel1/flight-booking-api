@@ -1,0 +1,627 @@
+/* General */
+body {
+    font-family: 'Cairo', sans-serif;
+    background: #f4f6fa;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+}
+
+* {
+    font-family: 'Cairo', sans-serif;
+}
+
+/* Wizard container */
+.wizard-container {
+    width: 900px;
+}
+
+/* Progress steps */
+.wizard-steps {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 30px;
+    position: relative;
+}
+
+.wizard-steps::before {
+    content: "";
+    position: absolute;
+    top: 22px;
+    left: 0;
+    right: 0;
+    height: 4px;
+    background: #ddd;
+    z-index: 0;
+}
+
+.step {
+    position: relative;
+    z-index: 1;
+    text-align: center;
+    flex: 1;
+}
+
+.step i {
+    color: #fff;
+    font-size: 16px;
+}
+
+.step span {
+    display: block;
+    font-size: 14px;
+    color: #043A63;
+    font-weight: 600;
+}
+
+/* Card */
+.wizard-card {
+    background: #fff;
+    padding: 40px;
+    border-radius: 12px;
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.04);
+}
+
+/* Titles */
+.title {
+    font-size: 26px;
+    color: #043A63;
+    margin-bottom: 0;
+    margin-top: 0;
+}
+
+.subtitle {
+    color: #555;
+    margin-bottom: 20px;
+    margin-top: 0;
+}
+
+.check-item {
+    background: #f9f9f9;
+    padding: 12px;
+    border-radius: 8px;
+    margin: 6px 0;
+    border-left: 4px solid #F57C00;
+    font-size: 15px;
+}
+
+/* Buttons */
+.btn-primary {
+    background: #F57C00;
+    color: #fff;
+    padding: 8px 30px;
+    font-size: 16px;
+    border-radius: 8px;
+    font-weight: 600;
+    text-decoration: none;
+    border: none;
+    cursor: pointer;
+    transition: 0.3s;
+}
+
+/* Force anchors in nav-buttons to not stretch */
+.nav-buttons > a {
+    display: inline-flex !important; /* inline button style */
+    width: auto !important; /* no full width */
+    flex: 0 0 auto !important; /* don't flex */
+}
+
+.btn-primary:hover {
+    background: #e66a00;
+}
+
+/* Center Card */
+.welcome-container {
+    text-align: center;
+}
+
+/* Logo */
+.logo {
+    max-width: 110px;
+    margin-bottom: -25px;
+}
+
+/* Titles */
+.welcome-title {
+    font-size: 30px;
+    font-weight: 700;
+    color: #043A63;
+    margin-bottom: 12px;
+}
+
+.welcome-subtitle {
+    font-size: 16px;
+    color: #555;
+    margin-bottom: 30px;
+    line-height: 1.6;
+}
+
+
+/* Badges */
+.badges {
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin: 25px 0 35px;
+}
+
+.badges span {
+    background: #f4f6fa;
+    padding: 8px 14px;
+    border-radius: 20px;
+    font-size: 14px;
+    color: #043A63;
+    font-weight: 500;
+    border: 1px solid #e5e7eb;
+}
+
+/* Requirements */
+.requirements-container {
+}
+
+.requirements-list {
+    margin: 30px auto;
+    max-width: 700px;
+    display: grid;
+    gap: 15px;
+    text-align: left;
+}
+
+/* Two columns */
+.requirements-list.grid {
+    grid-template-columns: repeat(2, 1fr);
+}
+
+/* Scrollable */
+.requirements-list.scrollable {
+    max-height: 350px;
+    overflow-y: auto;
+    padding-right: 8px;
+}
+
+.requirements-list.scrollable::-webkit-scrollbar {
+    width: 6px;
+}
+
+.requirements-list.scrollable::-webkit-scrollbar-thumb {
+    background: #ccc;
+    border-radius: 4px;
+}
+
+.requirements-list.scrollable::-webkit-scrollbar-track {
+    background: #f4f4f4;
+}
+
+/* Requirement item */
+.requirement-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 18px;
+    background: #f9f9f9;
+    border-radius: 10px;
+    font-size: 15px;
+}
+
+.requirement-name {
+    font-weight: 600;
+    color: #043A63;
+}
+
+.requirement-status {
+    font-weight: 600;
+    padding: 5px 20px;
+    border-radius: 8px;
+    font-size: 12px;
+}
+
+.requirement-status.ok {
+    background: #e8f5e9;
+    color: #2e7d32;
+}
+
+.requirement-status.fail {
+    background: #ffebee;
+    color: #c62828;
+}
+
+
+/* Nav buttons container */
+.nav-buttons {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 30px;
+}
+
+/* Back button */
+.btn-secondary {
+    background: #f4f6fa;
+    color: #043A63;
+    padding: 8px 30px;
+    font-size: 16px;
+    border-radius: 8px;
+    font-weight: 600;
+    text-decoration: none;
+    transition: 0.3s;
+}
+
+.btn-secondary:hover {
+    background: #e5e7eb;
+}
+
+
+/* Disabled state */
+.btn-primary.disabled {
+    background: #ccc;
+    pointer-events: none;
+    cursor: not-allowed;
+}
+
+/* Database Container */
+.database-container {
+    margin: 0 auto;
+}
+
+/* Inputs */
+.form-group {
+    margin-bottom: 10px;
+    text-align: left;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 6px;
+    font-weight: 600;
+    color: #043A63;
+}
+
+.form-group input {
+    width: 100%;
+    padding: 12px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    font-family: 'Cairo', sans-serif;
+    font-size: 15px;
+    height: 18px;
+}
+
+.form-group input:focus {
+    outline: none !important; /* kill default blue outline */
+    border-color: #F57C00; /* NexDine orange */
+    box-shadow: 0 0 0 3px rgba(245, 124, 0, 0.25); /* soft orange glow */
+
+}
+
+.form-group select {
+    width: 100%;
+    padding: 5px 12px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    font-family: 'Cairo', sans-serif;
+    font-size: 15px;
+    background-color: white;
+    appearance: none; /* Removes OS default arrow styling */
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg width='12' height='8' viewBox='0 0 12 8' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill='%23999' d='M6 8L0 0h12z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    background-size: 12px 8px;
+    cursor: pointer;
+}
+
+.form-group select:focus {
+    outline: none !important;
+    border-color: #F57C00; /* NexDine orange */
+    box-shadow: 0 0 0 3px rgba(245, 124, 0, 0.25); /* soft orange glow */
+}
+
+.form-group .hint {
+    display: block;
+    font-size: 13px;
+    color: #777;
+    margin-top: 5px;
+}
+
+/* Checkbox */
+.form-check {
+    text-align: left;
+    margin: 15px 0 25px;
+}
+
+.form-check input {
+    margin-right: 6px;
+}
+
+.form-check label {
+    color: #043A63;
+    font-weight: 500;
+}
+
+/* Alerts */
+.alert {
+    padding: 1px 15px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    font-size: 14px;
+    text-align: left;
+}
+
+.alert-danger {
+    background: #ffebee;
+    color: #c62828;
+}
+
+.required {
+    color: #c62828;
+}
+
+.form-row {
+    display: flex;
+    justify-content: center;
+}
+
+/* Add spacing between children */
+.form-row .form-group {
+    flex: 1;
+    min-width: 160px;
+    text-align: left;
+}
+
+/* Apply margin only to the right column */
+.form-row .form-group:not(:last-child) {
+    margin-right: 50px;
+}
+
+.form-row .form-group label {
+    display: block;
+    margin-bottom: 6px;
+    font-weight: 600;
+    color: #043A63;
+}
+
+.form-row .form-group input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid #d0d5dd;
+    border-radius: 6px;
+    font-family: 'Cairo', sans-serif;
+    font-size: 15px;
+    transition: all 0.2s ease-in-out;
+}
+
+/* Focus state */
+.form-row .form-group input:focus {
+    outline: none !important;
+    border-color: #F57C00;
+    box-shadow: 0 0 0 3px rgba(245, 124, 0, 0.25);
+}
+
+/* Container */
+.checkbox-group {
+    display: flex;
+    align-items: center;
+    margin: 20px 0 30px;
+    justify-content: flex-start;
+}
+
+/* Hide default checkbox */
+.checkbox-group input[type="checkbox"] {
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    width: 20px;
+    height: 20px;
+    border: 2px solid #d0d5dd;
+    border-radius: 6px; /* rounded corners */
+    margin-right: 10px;
+    position: relative;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+/* Checked state */
+.checkbox-group input[type="checkbox"]:checked {
+    background-color: #F57C00;
+    border-color: #F57C00;
+}
+
+/* Checkmark */
+.checkbox-group input[type="checkbox"]:checked::after {
+    content: "✔";
+    color: #fff;
+    font-size: 14px;
+    position: absolute;
+    top: -5px;
+    left: 2px;
+}
+
+/* Label */
+.checkbox-group label {
+    font-size: 15px;
+    color: #043A63;
+    font-weight: 500;
+    cursor: pointer;
+}
+
+/* Finish Step */
+.finish-container {
+    max-width: 600px;
+    margin: 0 auto;
+    text-align: center;
+    padding: 30px 20px;
+}
+
+/* Success Icon */
+.success-icon {
+    font-size: 50px;
+    color: #28a745; /* green */
+    background: #eafaf1;
+    width: 90px;
+    height: 90px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    margin: 0 auto 20px;
+    font-weight: bold;
+}
+
+/* Actions */
+.finish-actions {
+    display: flex;
+    justify-content: center;
+    gap: 15px;
+    margin-top: 30px;
+}
+
+.permissions-container {
+    max-width: 700px;
+    margin: 0 auto;
+}
+
+/* Checklist style */
+.permissions-list {
+    list-style: none;
+    margin: 30px 0;
+    padding: 0;
+    text-align: left;
+}
+
+.permissions-list li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #fff;
+    padding: 15px 20px;
+    margin-bottom: 12px;
+    border-radius: 8px;
+    border: 1px solid #eee;
+    transition: all 0.2s ease;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
+}
+
+.permissions-list li.ok {
+    border-left: 5px solid #28a745;
+}
+
+.permissions-list li.fail {
+    border-left: 5px solid #c62828;
+}
+
+.permissions-list .icon {
+    font-size: 20px;
+    margin-right: 15px;
+}
+
+.permissions-list li.ok .icon {
+    color: #28a745;
+}
+
+.permissions-list li.fail .icon {
+    color: #c62828;
+}
+
+.permissions-list .text {
+    flex: 1;
+}
+
+.permissions-list .text strong {
+    display: block;
+    color: #043A63;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.permissions-list .text small {
+    color: #666;
+    font-size: 12px;
+}
+
+.permissions-list .status {
+    font-size: 13px;
+    font-weight: 600;
+    color: #333;
+}
+
+.wizard-steps {
+    display: flex;
+    justify-content: space-between;
+    position: relative;
+    margin-bottom: 40px;
+}
+
+/* Gray baseline */
+.wizard-steps::before {
+    content: "";
+    position: absolute;
+    top: 20px;
+    left: 10%;
+    right: 10%;
+    height: 4px;
+    background: #ddd;
+    z-index: 1;
+}
+
+/* Each step */
+.step {
+    position: relative;
+    text-align: center;
+    flex: 1;
+    z-index: 2;
+}
+
+.step .circle {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: #ddd;
+    margin: 0 auto 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    color: #fff;
+    position: relative;
+}
+
+/* Labels */
+.step span {
+    font-size: 14px;
+    font-weight: 600;
+    color: #555;
+}
+
+/* Completed */
+.step.completed .circle {
+    background: #F57C00;
+}
+
+.step.completed span {
+    color: #F57C00;
+}
+
+/* Active */
+.step.active .circle {
+    background: #043A63;
+}
+
+.step.active span {
+    color: #043A63;
+}
+
+/* Connector line for completed steps */
+.step.completed::after {
+    content: "";
+    position: absolute;
+    top: 20px;
+    left: 50%;
+    width: 100%;
+    height: 4px;
+    background: #F57C00;
+    z-index: -1;
+}

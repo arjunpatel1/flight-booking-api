@@ -1,0 +1,12 @@
+{
+    "name": "Category",
+    "alias": "category",
+    "description": "",
+    "keywords": [],
+    "priority": 155,
+    "providers": [
+        "Modules\\Category\\Providers\\DeferredCategoryServiceProvider",
+        "Modules\\Category\\Providers\\CategoryServiceProvider"
+    ],
+    "files": []
+}

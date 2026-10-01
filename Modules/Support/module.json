@@ -1,0 +1,13 @@
+{
+    "name": "Support",
+    "alias": "support",
+    "description": "",
+    "keywords": [],
+    "priority": 3,
+    "providers": [
+        "Modules\\Support\\Providers\\SupportServiceProvider"
+    ],
+    "files": [
+        "helpers.php"
+    ]
+}

@@ -1,0 +1,16 @@
+{
+    "name": "nexdine/tax",
+    "description": "",
+    "authors": [
+        {
+            "name": "Tenvoro",
+            "email": "tenvoro@gmail.com"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "Modules\\Tax\\": "app/",
+            "Modules\\Tax\\Database\\Seeders\\": "database/seeders/"
+        }
+    }
+}

@@ -1,0 +1,11 @@
+{
+    "name": "Tax",
+    "alias": "tax",
+    "description": "",
+    "keywords": [],
+    "priority": 110,
+    "providers": [
+        "Modules\\Tax\\Providers\\DeferredTaxServiceProvider"
+    ],
+    "files": []
+}

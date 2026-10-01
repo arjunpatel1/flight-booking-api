@@ -1,0 +1,12 @@
+{
+    "name": "User",
+    "alias": "user",
+    "description": "",
+    "keywords": [],
+    "priority": 100,
+    "providers": [
+        "Modules\\User\\Providers\\UserServiceProvider",
+        "Modules\\User\\Providers\\UserEventServiceProvider",
+        "Modules\\User\\Providers\\DeferredUserServiceProvider"
+    ]
+}

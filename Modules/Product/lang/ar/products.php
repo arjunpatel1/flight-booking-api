@@ -1,0 +1,71 @@
+<?php
+return [
+    "products" => "المنتجات",
+    "product" => "المنتج",
+
+    "table" => [
+        "sku" => "رمز المنتج",
+        "name" => "الاسم",
+        "price" => "السعر",
+        "recommended" => "موصى به",
+        "best_seller" => "الأكثر مبيعًا",
+        "display_priority" => "الأولوية",
+        "thumbnail" => "الصورة المصغرة",
+    ],
+    "filters" => [
+        "recommended" => "موصى به",
+        "best_seller" => "الأكثر مبيعًا",
+    ],
+    "merchandising" => [
+        "title" => "الترويج الذكي",
+        "subtitle" => "راجع توصيات علامات المنتجات المبنية على المبيعات قبل تطبيقها.",
+        "open" => "الترويج الذكي",
+        "apply" => "تطبيق التوصيات",
+        "best_sellers" => "الأكثر مبيعًا المقترحة",
+        "stale_best_sellers" => "علامات الأكثر مبيعًا التي تحتاج مراجعة",
+        "sold_quantity" => "المباع",
+        "total_sales" => "المبيعات",
+        "priority" => "الأولوية",
+        "empty" => "لا توجد توصيات ترويجية للقائمة المحددة.",
+        "updated" => "تم تحديث :count منتج/منتجات.",
+    ],
+
+    "form" => [
+        "cards" => [
+            "general_information" => 'المعلومات العامة',
+            'pricing' => "التسعير",
+            "additional" => "إضافي",
+            "media" => 'الوسائط',
+            "options" => "الخيارات",
+            "ingredients" => "المكونات",
+        ],
+        "new_option" => "خيار جديد",
+        "add_option" => "إضافة خيار",
+        "add_row" => "إضافة صف",
+        "select_template" => "اختر قالب",
+        "insert" => "إدراج",
+        "label" => "التسمية",
+        "price" => "السعر",
+        "price_type" => "نوع السعر",
+        "collapse_all" => "طي الكل",
+        "expand_all" => "توسيع الكل",
+        "add_ingredient" => "إضافة مكون",
+
+        "ingredient" => "المكون",
+        "quantity" => "الكمية",
+        "loss_pct" => "نسبة الفقد",
+        "note" => "ملاحظة",
+        "operation" => "العملية",
+        "price_by_type" => "السعر حسب النوع",
+        "is_global" => "استخدام السعر الافتراضي",
+        "add_price_by_type" => "إضافة سعر",
+        "no_prices_by_type" => "لم تتم إضافة أسعار",
+        "no_ingredients_added" => "لم تتم إضافة مكونات",
+        "no_ingredients_added_message" => "ابدأ في إنشاء وصفتك بإضافة المكونات. كل مكون يتضمن الكمية، الوحدة، وتفاصيل التكلفة.",
+        "manage_ingredients" => "إدارة المكونات",
+        "option_manage_ingredients_modal" => [
+            "title" => "إدارة المكونات",
+            "description" => "يمكنك بسهولة إضافة وتخصيص المكونات لكل قيمة من قيم خيار المنتج لتتبع التكاليف، وإدارة استهلاك المخزون، وتفصيل الوصفات. تأكد من التحكم الدقيق في المخزون وجودة المنتجات باستمرار.",
+        ],
+    ]
+];

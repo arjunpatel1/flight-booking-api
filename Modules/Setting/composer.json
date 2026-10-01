@@ -1,0 +1,19 @@
+{
+    "name": "nexdine/setting",
+    "description": "",
+    "authors": [
+        {
+            "name": "Tenvoro",
+            "email": "tenvoro@gmail.com"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "Modules\\Setting\\": "app/",
+            "Modules\\Setting\\Database\\Seeders\\": "database/seeders/"
+        },
+        "files": [
+            "helpers.php"
+        ]
+    }
+}

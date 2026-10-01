@@ -1,0 +1,45 @@
+<?php
+
+return [
+    'preview' => 'معاينة الرواتب',
+    'generate' => 'إنشاء مسير رواتب',
+    'approve' => 'اعتماد',
+    'export' => 'تصدير نظامي',
+    'runs' => 'مسيرات الرواتب',
+    'empty_preview' => 'لا توجد سجلات حضور مغلقة لهذه الفترة.',
+    'select_branch' => 'اختر الفرع',
+    'generated' => 'تم إنشاء مسير الرواتب بنجاح.',
+    'approved' => 'تم اعتماد مسير الرواتب بنجاح.',
+    'export_ready' => 'التصدير النظامي جاهز.',
+    'statuses' => [
+        'draft' => 'مسودة',
+        'approved' => 'معتمد',
+        'paid' => 'مدفوع',
+        'cancelled' => 'ملغي',
+    ],
+    'summary' => [
+        'employees' => 'الموظفون',
+        'worked_hours' => 'ساعات العمل',
+        'overtime_hours' => 'ساعات إضافية',
+        'gross_amount' => 'الإجمالي',
+        'deduction_amount' => 'الخصومات',
+        'net_amount' => 'الصافي',
+    ],
+    'filters' => [
+        'from' => 'من',
+        'to' => 'إلى',
+    ],
+    'table' => [
+        'employee' => 'الموظف',
+        'pay_type' => 'نوع الأجر',
+        'worked_minutes' => 'دقائق العمل',
+        'overtime_minutes' => 'دقائق إضافية',
+        'base_amount' => 'الأجر الأساسي',
+        'overtime_amount' => 'أجر الإضافي',
+        'gross_amount' => 'الإجمالي',
+        'deduction_amount' => 'الخصومات',
+        'net_amount' => 'الصافي',
+        'status' => 'الحالة',
+        'period' => 'الفترة',
+    ],
+];

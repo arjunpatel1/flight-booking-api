@@ -1,0 +1,11 @@
+{
+    "name": "WhatsAppCenter",
+    "alias": "whatsapp_center",
+    "description": "WhatsApp Communication Center",
+    "keywords": [],
+    "priority": 185,
+    "providers": [
+        "Modules\\WhatsAppCenter\\Providers\\WhatsAppCenterServiceProvider"
+    ],
+    "files": []
+}

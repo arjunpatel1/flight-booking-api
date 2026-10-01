@@ -1,0 +1,16 @@
+{
+    "name": "nexdine/saas",
+    "description": "Commercial SaaS and franchise management foundation.",
+    "authors": [
+        {
+            "name": "Tenvoro",
+            "email": "tenvoro@gmail.com"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "Modules\\Saas\\": "app/",
+            "Modules\\Saas\\Database\\Seeders\\": "database/seeders/"
+        }
+    }
+}

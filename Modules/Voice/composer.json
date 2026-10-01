@@ -1,0 +1,11 @@
+{
+    "name": "nexdine/voice",
+    "description": "Voice announcement module for KOT notifications",
+    "type": "library",
+    "autoload": {
+        "psr-4": {
+            "Modules\\Voice\\": "app/",
+            "Modules\\Voice\\Database\\Factories\\": "database/factories/"
+        }
+    }
+}

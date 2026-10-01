@@ -1,0 +1,15 @@
+{
+    "name": "nexdine/financial-dashboard",
+    "description": "",
+    "authors": [
+        {
+            "name": "Tenvoro",
+            "email": "tenvoro@gmail.com"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "Modules\\FinancialDashboard\\": "app/"
+        }
+    }
+}

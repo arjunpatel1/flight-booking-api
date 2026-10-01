@@ -1,0 +1,66 @@
+openapi: 3.1.0
+info:
+  title: NexDine Partner API
+  version: 1.0.0
+servers:
+  - url: https://api.example.com/api/v1/partner
+paths:
+  /health:
+    get:
+      operationId: partnerHealth
+      responses:
+        '200': { description: Authenticated API health }
+        '401': { $ref: '#/components/responses/AuthenticationFailed' }
+  /branches:
+    get:
+      operationId: listBranches
+      responses:
+        '200': { description: Branches assigned to the credential }
+        '401': { $ref: '#/components/responses/AuthenticationFailed' }
+        '403': { description: Missing catalog scope }
+  /branches/{branch_uuid}/menus:
+    get:
+      operationId: listBranchMenus
+      parameters:
+        - $ref: '#/components/parameters/BranchUuid'
+      responses:
+        '200': { description: Active menus for the branch }
+        '404': { description: Branch is absent or outside credential scope }
+  /menus/{menu_uuid}/products:
+    get:
+      operationId: listMenuProducts
+      parameters:
+        - name: menu_uuid
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1 }
+        - name: per_page
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100 }
+      responses:
+        '200': { description: Server-priced active products }
+components:
+  parameters:
+    BranchUuid:
+      name: branch_uuid
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  responses:
+    AuthenticationFailed:
+      description: Invalid, expired, replayed, or disallowed signed request
+  securitySchemes:
+    ApiKey:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+    HmacSignature:
+      type: apiKey
+      in: header
+      name: X-Signature
+security:
+  - ApiKey: []
+    HmacSignature: []

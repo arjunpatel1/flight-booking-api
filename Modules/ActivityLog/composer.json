@@ -1,0 +1,19 @@
+{
+    "name": "nexdine/activitylog",
+    "description": "",
+    "authors": [
+        {
+            "name": "Tenvoro",
+            "email": "tenvoro@gmail.com"
+        }
+    ],
+    "require": {
+        "spatie/laravel-activitylog": "^4.10",
+        "yadahan/laravel-authentication-log": "^1.8"
+    },
+    "autoload": {
+        "psr-4": {
+            "Modules\\ActivityLog\\": "app/"
+        }
+    }
+}

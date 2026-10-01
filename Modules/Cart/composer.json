@@ -1,0 +1,19 @@
+{
+    "name": "nexdine/cart",
+    "description": "",
+    "authors": [
+        {
+            "name": "Tenvoro",
+            "email": "info@tenvoro.dev"
+        }
+    ],
+    "require": {
+        "php": "^8.2.0",
+        "darryldecode/cart": "^4.2"
+    },
+    "autoload": {
+        "psr-4": {
+            "Modules\\Cart\\": "app/"
+        }
+    }
+}

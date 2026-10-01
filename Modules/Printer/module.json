@@ -1,0 +1,12 @@
+{
+    "name": "Printer",
+    "alias": "printer",
+    "description": "",
+    "keywords": [],
+    "priority": 200,
+    "providers": [
+        "Modules\\Printer\\Providers\\DeferredPrinterServiceProvider",
+        "Modules\\Printer\\Providers\\PrinterConsoleServiceProvider"
+    ],
+    "files": []
+}

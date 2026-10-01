@@ -1,0 +1,80 @@
+{
+  "info": {
+    "name": "NexDine Delivery — Local API",
+    "description": "NexDine application APIs only. No Flash/uEngage provider request is included. Use a local environment and tenant-scoped credentials. Mutations require the explicit allow_delivery_mutations environment variable.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }] },
+  "variable": [
+    { "key": "base_url", "value": "http://127.0.0.1:8000/api/v1" },
+    { "key": "token", "value": "" },
+    { "key": "cart_id", "value": "00000000-0000-4000-8000-000000000000" },
+    { "key": "order_reference", "value": "ORD-REPLACE-ME" },
+    { "key": "branch_id", "value": "1" },
+    { "key": "tenant_id", "value": "1" },
+    { "key": "delivery_id", "value": "1" }
+  ],
+  "item": [
+    {
+      "name": "Tenant read only",
+      "description": "Requires a tenant user with delivery settings and order permissions. The delivery feature must be granted to the tenant.",
+      "item": [
+        { "name": "Delivery settings", "request": { "method": "GET", "url": "{{base_url}}/settings/delivery" } },
+        { "name": "Wallet and paginated ledger", "request": { "method": "GET", "url": "{{base_url}}/settings/delivery/wallet?page=1&limit=50" } },
+        { "name": "Delivered delivery orders", "request": { "method": "GET", "url": "{{base_url}}/orders?filters[type]=delivery&filters[delivery_status]=delivered&page=1" } },
+        { "name": "Order detail with delivery", "request": { "method": "GET", "url": "{{base_url}}/orders/{{order_reference}}/show" } },
+        { "name": "Live delivery tracking", "request": { "method": "GET", "url": "{{base_url}}/live-tracking" } }
+      ]
+    },
+    {
+      "name": "Customer read only",
+      "description": "Use a customer token for the matching restaurant. Quoting computes a preview and does not book a courier.",
+      "item": [
+        { "name": "Delivery quote", "request": {
+          "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": { "mode": "raw", "raw": "{\"branch_id\":{{branch_id}},\"delivery_address\":{\"latitude\":12.9716,\"longitude\":77.5946}}", "options": { "raw": { "language": "json" } } },
+          "url": "{{base_url}}/customer-app/delivery/quote/{{cart_id}}",
+          "description": "Requires an existing customer cart and an authorized saved address or explicit coordinates. The sample coordinates are illustrative; replace them locally."
+        } },
+        { "name": "My order tracking", "request": { "method": "GET", "url": "{{base_url}}/customer-app/orders/tracking/{{order_reference}}" } }
+      ]
+    },
+    {
+      "name": "Tenant mutations — manual only",
+      "event": [{ "listen": "prerequest", "script": { "type": "text/javascript", "exec": [
+        "if (pm.environment.get('allow_delivery_mutations') !== 'true' || !/^https?:\\/\\/(127\\.0\\.0\\.1|localhost)(:\\d+)?\\//.test(pm.variables.get('base_url') || '')) pm.execution.skipRequest();"
+      ] } }],
+      "item": [
+        { "name": "Update delivery settings", "request": {
+          "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": { "mode": "raw", "raw": "{\"delivery_ordering_enabled\":false,\"delivery_schedule_enabled\":false,\"delivery_hours\":{},\"delivery_enabled\":false,\"third_party_delivery_enabled\":false,\"delivery_cod_enabled\":false,\"delivery_prepaid_enabled\":false,\"mandatory_delivery_location_enabled\":false,\"maximum_delivery_radius_km\":5,\"delivery_pricing_method\":\"base_plus_km\",\"base_delivery_charge\":0,\"base_distance_km\":0,\"per_additional_km_charge\":0,\"free_delivery_above_order_amount\":null}", "options": { "raw": { "language": "json" } } },
+          "url": "{{base_url}}/settings/delivery/update",
+          "description": "Tenant-editable fields only. Provider credentials and provider controls are platform-managed."
+        } },
+        { "name": "Update wallet alert threshold", "request": {
+          "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": { "mode": "raw", "raw": "{\"low_balance_threshold\":100,\"block_booking_when_insufficient\":true}", "options": { "raw": { "language": "json" } } },
+          "url": "{{base_url}}/settings/delivery/wallet",
+          "description": "Does not credit or debit the wallet."
+        } }
+      ]
+    },
+    {
+      "name": "Platform wallet — manual only",
+      "description": "Requires platform actor and admin.tenants.edit. Credit only after independently verified funds; refund only after confirmed provider refund.",
+      "item": [
+        { "name": "Tenant wallet report", "request": { "method": "GET", "url": "{{base_url}}/tenants/{{tenant_id}}/delivery-wallet?page=1&limit=50" } },
+        { "name": "Audited credit or debit", "event": [{ "listen": "prerequest", "script": { "type": "text/javascript", "exec": ["if (pm.environment.get('allow_delivery_mutations') !== 'true' || !/^https?:\\/\\/(127\\.0\\.0\\.1|localhost)(:\\d+)?\\//.test(pm.variables.get('base_url') || '')) pm.execution.skipRequest();"] } }], "request": {
+          "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": { "mode": "raw", "raw": "{\"type\":\"credit\",\"amount\":1,\"reason\":\"Verified local test credit\",\"idempotency_key\":\"{{$guid}}\"}", "options": { "raw": { "language": "json" } } },
+          "url": "{{base_url}}/tenants/{{tenant_id}}/delivery-wallet/adjust"
+        } },
+        { "name": "Confirmed provider refund", "event": [{ "listen": "prerequest", "script": { "type": "text/javascript", "exec": ["if (pm.environment.get('allow_delivery_mutations') !== 'true' || !/^https?:\\/\\/(127\\.0\\.0\\.1|localhost)(:\\d+)?\\//.test(pm.variables.get('base_url') || '')) pm.execution.skipRequest();"] } }], "request": {
+          "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+          "body": { "mode": "raw", "raw": "{\"delivery_id\":{{delivery_id}},\"amount\":1,\"provider_reference\":\"LOCAL-REFUND-REPLACE-ME\",\"reason\":\"Confirmed local provider refund\",\"idempotency_key\":\"{{$guid}}\"}", "options": { "raw": { "language": "json" } } },
+          "url": "{{base_url}}/tenants/{{tenant_id}}/delivery-wallet/refund"
+        } }
+      ]
+    }
+  ]
+}

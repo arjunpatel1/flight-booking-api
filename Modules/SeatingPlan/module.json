@@ -1,0 +1,13 @@
+{
+    "name": "SeatingPlan",
+    "alias": "seatingplan",
+    "description": "",
+    "keywords": [],
+    "priority": 150,
+    "providers": [
+        "Modules\\SeatingPlan\\Providers\\SeatingPlanServiceProvider",
+        "Modules\\SeatingPlan\\Providers\\DeferredSeatingPlanServiceProvider",
+        "Modules\\SeatingPlan\\Providers\\EventServiceProvider"
+    ],
+    "files": []
+}

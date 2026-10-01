@@ -1,0 +1,19 @@
+{
+    "name": "nexdine/invoice",
+    "description": "",
+    "authors": [
+        {
+            "name": "Tenvoro",
+            "email": "info@tenvoro.dev"
+        }
+    ],
+    "require": {
+        "php": "^8.2",
+        "prgayman/laravel-zatca": "^1.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Modules\\Invoice\\": "app/"
+        }
+    }
+}

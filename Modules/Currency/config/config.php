@@ -1,0 +1,19 @@
+<?php
+
+use Modules\User\Enums\{PermissionAction as Action};
+
+return [
+    'services' => [
+        'array' => ['latestRates' => []],
+        'fixer' => ['access_key' => env('FIXER_ACCESS_KEY')],
+        'forge' => ['api_key' => env('FORGE_API_KEY')],
+        'currency_data_feed' => ['api_key' => env('CURRENCY_DATA_FEED_API_KEY')],
+    ],
+    
+    'permissions' => [
+        "currency_rates" => [
+            Action::Index,
+            Action::Edit,
+        ],
+    ],
+];

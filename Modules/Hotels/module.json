@@ -1,0 +1,11 @@
+{
+    "name": "Hotels",
+    "alias": "hotels",
+    "description": "",
+    "keywords": [],
+    "priority": 150,
+    "providers": [
+        "Modules\\Hotels\\Providers\\DeferredHotelsServiceProvider"
+    ],
+    "files": []
+}

@@ -1,0 +1,21 @@
+{
+    "name": "nexdine/user",
+    "description": "",
+    "authors": [
+        {
+            "name": "Tenvoro",
+            "email": "tenvoro@gmail.com"
+        }
+    ],
+    "require": {
+        "spatie/laravel-permission": "^6.20",
+        "laravel/sanctum": "^4.1"
+    },
+    "autoload": {
+        "psr-4": {
+            "Modules\\User\\": "app/",
+            "Modules\\User\\Database\\Factories\\": "database/factories/",
+            "Modules\\User\\Database\\Seeders\\": "database/seeders/"
+        }
+    }
+}

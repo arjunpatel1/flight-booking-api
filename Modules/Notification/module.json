@@ -1,0 +1,12 @@
+{
+    "name": "Notification",
+    "alias": "notification",
+    "description": "",
+    "keywords": [],
+    "priority": 180,
+    "providers": [
+        "Modules\\Notification\\Providers\\NotificationServiceProvider",
+        "Modules\\Notification\\Providers\\DeferredNotificationServiceProvider"
+    ],
+    "files": []
+}

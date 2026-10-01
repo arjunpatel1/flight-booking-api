@@ -1,0 +1,13 @@
+{
+    "name": "Cart",
+    "alias": "cart",
+    "description": "",
+    "keywords": [],
+    "priority": 120,
+    "providers": [
+        "Modules\\Cart\\Providers\\CartServiceProvider",
+        "Modules\\Cart\\Providers\\EventServiceProvider",
+        "Modules\\Cart\\Providers\\DeferredCartServiceProvider"
+    ],
+    "files": []
+}

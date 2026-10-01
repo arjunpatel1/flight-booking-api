@@ -1,0 +1,17 @@
+{
+    "name": "nexdine/tracking",
+    "description": "",
+    "authors": [
+        {
+            "name": "Tenvoro",
+            "email": "tenvoro@gmail.com"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "Modules\\Tracking\\": "app/",
+            "Modules\\Tracking\\Database\\Factories\\": "database/factories/",
+            "Modules\\Tracking\\Database\\Seeders\\": "database/seeders/"
+        }
+    }
+}

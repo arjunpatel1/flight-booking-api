@@ -1,0 +1,4 @@
+[[IgnoredVulns]]
+id = "GHSA-jmr9-qjv8-65gv"
+ignoreUntil = 2026-11-25
+reason = "No fixed extract-zip release exists. This package is used only by @puppeteer/browsers to install a trusted Chromium archive, never to extract tenant-controlled content. Review or remove before this exception expires."

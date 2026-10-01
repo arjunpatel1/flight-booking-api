@@ -1,0 +1,12 @@
+{
+    "name": "Pos",
+    "alias": "pos",
+    "description": "",
+    "keywords": [],
+    "priority": 160,
+    "providers": [
+        "Modules\\Pos\\Providers\\DeferredPosServiceProvider",
+        "Modules\\Pos\\Providers\\EventServiceProvider"
+    ],
+    "files": []
+}

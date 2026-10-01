@@ -1,0 +1,22 @@
+<?php
+
+namespace $NAMESPACE$;
+
+use Modules\Core\Http\Requests\Request;
+
+class $CLASS$ extends Request
+{
+    /**
+     * Get the validation rules that apply to the request.
+     */
+    public function rules(): array
+    {
+        return [];
+    }
+
+    /** @inheritDoc */
+    protected function availableAttributes(): string
+    {
+        return "::attributes.";
+    }
+}

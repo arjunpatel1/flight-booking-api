@@ -1,0 +1,15 @@
+{
+    "name": "nexdine/installer",
+    "description": "",
+    "authors": [
+        {
+            "name": "Tenvoro",
+            "email": "tenvoro@gmail.com"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "Modules\\Installer\\": "app/"
+        }
+    }
+}

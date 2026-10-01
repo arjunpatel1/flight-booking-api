@@ -1,0 +1,12 @@
+{
+    "name": "Media",
+    "alias": "media",
+    "description": "",
+    "keywords": [],
+    "priority": 140,
+    "providers": [
+        "Modules\\Media\\Providers\\DeferredMediaServiceProvider",
+        "Modules\\Media\\Providers\\MediaServiceProvider"
+    ],
+    "files": []
+}

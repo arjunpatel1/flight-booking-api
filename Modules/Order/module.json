@@ -1,0 +1,12 @@
+{
+    "name": "Order",
+    "alias": "order",
+    "description": "",
+    "keywords": [],
+    "priority": 170,
+    "providers": [
+        "Modules\\Order\\Providers\\DeferredOrderServiceProvider",
+        "Modules\\Order\\Providers\\EventServiceProvider"
+    ],
+    "files": []
+}

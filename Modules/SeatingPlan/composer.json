@@ -1,0 +1,17 @@
+{
+    "name": "nexdine/seatingplan",
+    "description": "",
+    "authors": [
+        {
+            "name": "Tenvoro",
+            "email": "tenvoro@gmail.com"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "Modules\\SeatingPlan\\": "app/",
+            "Modules\\SeatingPlan\\Database\\Factories\\": "database/factories/",
+            "Modules\\SeatingPlan\\Database\\Seeders\\": "database/seeders/"
+        }
+    }
+}

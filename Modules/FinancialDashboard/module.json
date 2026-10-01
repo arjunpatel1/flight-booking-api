@@ -1,0 +1,11 @@
+{
+    "name": "FinancialDashboard",
+    "alias": "financial_dashboard",
+    "description": "Owner Financial Intelligence Dashboard",
+    "keywords": [],
+    "priority": 195,
+    "providers": [
+        "Modules\\FinancialDashboard\\Providers\\FinancialDashboardServiceProvider"
+    ],
+    "files": []
+}

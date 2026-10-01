@@ -1,0 +1,17 @@
+{
+    "name": "nexdine/aggregator",
+    "description": "",
+    "authors": [
+        {
+            "name": "Tenvoro",
+            "email": "tenvoro@gmail.com"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "Modules\\Aggregator\\": "app/",
+            "Modules\\Aggregator\\Database\\Factories\\": "database/factories/",
+            "Modules\\Aggregator\\Database\\Seeders\\": "database/seeders/"
+        }
+    }
+}

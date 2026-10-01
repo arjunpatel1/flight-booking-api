@@ -1,0 +1,10 @@
+{
+    "name": "Installer",
+    "alias": "installer",
+    "description": "",
+    "keywords": [],
+    "priority": 1000,
+    "providers": [
+    ],
+    "files": []
+}

@@ -1,0 +1,12 @@
+{
+    "name": "Voice",
+    "alias": "voice",
+    "description": "Voice announcement system for KOT notifications",
+    "keywords": ["voice", "announcement", "kot", "tts"],
+    "priority": 180,
+    "providers": [
+        "Modules\\Voice\\Providers\\VoiceServiceProvider",
+        "Modules\\Voice\\Providers\\EventServiceProvider"
+    ],
+    "files": []
+}
