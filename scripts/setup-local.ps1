@@ -5,10 +5,11 @@
     (or double-click / run setup-local.cmd in the project root)
 
   Only Git is needed beforehand. Installs PHP 8.4 (+ extensions), Composer,
-  MySQL, Redis and Node.js via Scoop when missing, configures Reverb, creates
-  .env and the database, runs migrations + seeders, prints the login details and
-  starts the API, queue worker and Reverb (scripts\start-local.ps1).
-  Safe to re-run: every step is idempotent.
+  nginx, MySQL, Redis and Node.js via Scoop when missing, configures nginx and
+  Reverb, adds the local domains to the hosts file (one UAC prompt), creates
+  .env and the database, runs migrations + seeders, provisions a demo tenant,
+  prints the login details and starts nginx, PHP, the queue worker and Reverb
+  (scripts\start-local.ps1). Safe to re-run: every step is idempotent.
 
   If a MySQL server is already listening on 3306 (XAMPP, Laragon, MySQL
   Installer...) it is reused; pass its root password with -MysqlRootPassword.
@@ -18,8 +19,11 @@ param(
     [string]$DbUsername = 'nexdine',
     [string]$DbPassword = 'secret',
     [string]$MysqlRootPassword = '',
-    [int]$AppPort = 8000,
+    [string]$RootDomain = 'nexdine.test',
+    [int]$HttpPort = 80,
     [int]$ReverbPort = 8080,
+    [string]$TenantSlug = 'demo',
+    [string]$TenantPassword = 'Demo@12345',
     [switch]$SkipNpm,
     [switch]$Fresh,
     [switch]$NoStart
@@ -28,6 +32,12 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 Set-Location (Split-Path -Parent $PSScriptRoot)
+
+$ApiDomain = "api.$RootDomain"
+$TenantDomain = "$TenantSlug.$RootDomain"
+$TenantEmail = "admin@$TenantDomain"
+$PortSuffix = if ($HttpPort -eq 80) { '' } else { ":$HttpPort" }
+$AppUrl = "http://$ApiDomain$PortSuffix"
 
 function Step($msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
 function Warn($msg) { Write-Host "WARNING: $msg" -ForegroundColor Yellow }
@@ -96,6 +106,8 @@ if ((Php-Version) -lt [version]'8.4') {
 if (-not (Has composer)) { Step 'Installing Composer'; Run scoop install composer }
 
 if (-not (Has redis-server)) { Step 'Installing Redis'; Run scoop install redis }
+
+if (-not (Has nginx)) { Step 'Installing nginx'; Run scoop install nginx }
 
 if (-not $SkipNpm -and -not (Has node)) { Step 'Installing Node.js LTS'; Run scoop install nodejs-lts }
 
@@ -172,8 +184,12 @@ Step 'Configuring .env'
 if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 Set-Env APP_ENV local
 Set-Env APP_DEBUG true
-Set-Env APP_URL "http://127.0.0.1:$AppPort"
+Set-Env APP_URL $AppUrl
 Set-Env APP_INSTALLED true
+Set-Env PUBLIC_DOMAIN $RootDomain
+Set-Env API_DOMAIN $ApiDomain
+Set-Env SAAS_ROOT_DOMAIN $RootDomain
+Set-Env SAAS_CENTRAL_DOMAINS "localhost,127.0.0.1,$RootDomain,$ApiDomain"
 Set-Env DB_CONNECTION mysql
 Set-Env DB_HOST 127.0.0.1
 Set-Env DB_PORT 3306
@@ -190,6 +206,7 @@ Set-Env REVERB_PORT $ReverbPort
 Set-Env REVERB_SCHEME http
 Set-Env REVERB_SERVER_HOST 0.0.0.0
 Set-Env REVERB_SERVER_PORT $ReverbPort
+Set-Env REVERB_ALLOWED_ORIGINS "localhost,127.0.0.1,$RootDomain,$ApiDomain,$TenantDomain"
 if (-not (Get-EnvValue QR_SECRET)) { Set-Env QR_SECRET (& php -r 'echo bin2hex(random_bytes(32));') }
 
 Step 'Installing Composer dependencies'
@@ -212,6 +229,9 @@ Run php artisan permission:sync-default-roles --force
 
 if (-not (Test-Path public\storage)) { & php artisan storage:link }
 
+Step "Provisioning tenant '$TenantSlug' ($TenantDomain)"
+Run php scripts\local-tenant.php $TenantSlug $TenantDomain $TenantEmail $TenantPassword
+
 if (-not $SkipNpm) {
     Step 'Installing Node dependencies (Puppeteer)'
     & npm install
@@ -220,23 +240,109 @@ if (-not $SkipNpm) {
 
 & php artisan optimize:clear | Out-Null
 
+# --- nginx -------------------------------------------------------------------
+# A project-local nginx prefix (storage\nginx) so nothing global is touched.
+# start-local.ps1 runs it together with php-cgi FastCGI workers on 9001-9004.
+Step "Configuring nginx for $ApiDomain, $RootDomain and *.$RootDomain"
+$nginxPrefix = Join-Path $PWD 'storage\nginx'
+foreach ($dir in 'conf', 'logs', 'temp\client_body_temp', 'temp\proxy_temp', 'temp\fastcgi_temp', 'temp\uwsgi_temp', 'temp\scgi_temp') {
+    New-Item -ItemType Directory -Force -Path (Join-Path $nginxPrefix $dir) | Out-Null
+}
+$nginxHome = (& scoop prefix nginx).Trim()
+Copy-Item (Join-Path $nginxHome 'conf\mime.types') (Join-Path $nginxPrefix 'conf') -Force
+Copy-Item (Join-Path $nginxHome 'conf\fastcgi_params') (Join-Path $nginxPrefix 'conf') -Force
+$publicDir = (Join-Path $PWD 'public') -replace '\\', '/'
+$nginxConf = @"
+worker_processes 1;
+error_log logs/error.log;
+pid logs/nginx.pid;
+
+events { worker_connections 1024; }
+
+http {
+    include mime.types;
+    default_type application/octet-stream;
+    sendfile off;
+    access_log logs/access.log;
+    client_max_body_size 64m;
+
+    upstream php_cgi {
+        server 127.0.0.1:9001;
+        server 127.0.0.1:9002;
+        server 127.0.0.1:9003;
+        server 127.0.0.1:9004;
+    }
+
+    server {
+        listen $HttpPort;
+        server_name $RootDomain $ApiDomain *.$RootDomain localhost;
+        root "$publicDir";
+        index index.php;
+        charset utf-8;
+
+        location / {
+            try_files `$uri `$uri/ /index.php?`$query_string;
+        }
+
+        location ~ \.php$ {
+            fastcgi_pass php_cgi;
+            fastcgi_param SCRIPT_FILENAME `$document_root`$fastcgi_script_name;
+            include fastcgi_params;
+            fastcgi_hide_header X-Powered-By;
+            fastcgi_read_timeout 300;
+        }
+
+        location ~ /\.(?!well-known).* {
+            deny all;
+        }
+    }
+}
+"@
+[IO.File]::WriteAllText((Join-Path $nginxPrefix 'conf\nginx.conf'), $nginxConf)
+
+Step 'Adding local domains to the hosts file'
+$hostsFile = "$env:SystemRoot\System32\drivers\etc\hosts"
+$hostsText = Get-Content $hostsFile -Raw
+$missing = @($RootDomain, $ApiDomain, $TenantDomain) |
+    Where-Object { $hostsText -notmatch "(?m)^\s*127\.0\.0\.1\s+.*\b$([regex]::Escape($_))\b" }
+if ($missing) {
+    $lines = ($missing | ForEach-Object { "127.0.0.1 $_" }) -join "`r`n"
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator)
+    if ($isAdmin) {
+        Add-Content -Path $hostsFile -Value "`r`n$lines"
+    } else {
+        Write-Host 'Windows will ask for administrator permission to edit the hosts file.'
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes(
+            "Add-Content -Path '$hostsFile' -Value '`r`n$lines'"))
+        Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile', '-EncodedCommand', $encoded
+    }
+}
+
 Step 'Setup complete'
 Write-Host @"
 
   +--------------------------- Login details ----------------------------+
-    API URL         http://127.0.0.1:$AppPort
-    Admin email     admin@myteknoland.com
-    Admin password  12345678        (change it after first login)
+    Platform (super admin)
+      API URL       $AppUrl
+      Email         admin@myteknoland.com
+      Password      12345678
+
+    Tenant "$TenantSlug"
+      URL           http://$TenantDomain$PortSuffix
+      Email         $TenantEmail
+      Password      $TenantPassword
 
     MySQL           127.0.0.1:3306  db=$DbDatabase  user=$DbUsername  pass=$DbPassword
     Redis           127.0.0.1:6379
     Reverb (WS)     ws://127.0.0.1:$ReverbPort
   +-----------------------------------------------------------------------+
+  Local credentials only. Change them before using this data anywhere else.
 
   Start everything later with:  start-local.cmd
   Open a NEW terminal so PATH changes (php, composer, mysql) are picked up.
 "@ -ForegroundColor Green
 
 if (-not $NoStart) {
-    & (Join-Path $PSScriptRoot 'start-local.ps1') -AppPort $AppPort
+    & (Join-Path $PSScriptRoot 'start-local.ps1')
 }

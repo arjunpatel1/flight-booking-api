@@ -1,56 +1,59 @@
 #!/usr/bin/env bash
 #
-# Starts the local dev stack: API server, queue worker and Reverb.
-# Ctrl+C stops all of them. Logs: storage/logs/{serve,queue,reverb}.log
+# Starts the local dev stack. nginx, PHP-FPM, MySQL and Redis are system
+# services (started if stopped); the queue worker and Reverb run in this
+# terminal. Ctrl+C stops them. Logs: storage/logs/{queue,reverb}.log
 #
 #   bash scripts/start-local.sh
 #
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-APP_PORT=${APP_PORT:-8000}
-REVERB_PORT=$(grep -E '^REVERB_SERVER_PORT=' .env 2>/dev/null | cut -d= -f2 || true)
+env_value() { grep -E "^$1=" .env 2>/dev/null | head -n1 | cut -d= -f2- | tr -d '"' || true; }
+
+APP_URL=$(env_value APP_URL)
+REVERB_PORT=$(env_value REVERB_SERVER_PORT)
 REVERB_PORT=${REVERB_PORT:-8080}
+# Every queue the app dispatches to (mirrors config/horizon.php).
+QUEUES=default,notifications,whatsapp,emails,mail,printing,provisioning,assets,delivery,monitoring,analytics,reports,backup
 LOG_DIR=storage/logs
 mkdir -p "$LOG_DIR"
 
-# Make sure MySQL and Redis are up (no-op when already running).
 if [ "$(id -u)" -eq 0 ]; then SUDO=''; else SUDO='sudo'; fi
-for svc in mysql mariadb redis-server; do
-  if systemctl list-unit-files "$svc.service" >/dev/null 2>&1 && ! systemctl is-active --quiet "$svc"; then
+for svc in mysql mariadb redis-server php8.4-fpm nginx; do
+  if systemctl cat "$svc.service" >/dev/null 2>&1 && ! systemctl is-active --quiet "$svc"; then
+    echo "Starting $svc..."
     $SUDO systemctl start "$svc" || true
   fi
 done
 
 pids=()
 cleanup() {
-  echo; echo "Stopping..."
+  echo; echo "Stopping queue worker and Reverb..."
   kill "${pids[@]}" 2>/dev/null || true
   wait 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
-php artisan serve --host=127.0.0.1 --port="$APP_PORT" > "$LOG_DIR/serve.log" 2>&1 &
-pids+=($!)
-php artisan queue:listen --tries=1 > "$LOG_DIR/queue.log" 2>&1 &
+php artisan queue:listen --queue="$QUEUES" --tries=1 > "$LOG_DIR/queue.log" 2>&1 &
 pids+=($!)
 php artisan reverb:start --host=0.0.0.0 --port="$REVERB_PORT" > "$LOG_DIR/reverb.log" 2>&1 &
 pids+=($!)
 
 sleep 2
 for pid in "${pids[@]}"; do
-  kill -0 "$pid" 2>/dev/null || { echo "A process failed to start. Check $LOG_DIR/{serve,queue,reverb}.log" >&2; exit 1; }
+  kill -0 "$pid" 2>/dev/null || { echo "A process failed to start. Check $LOG_DIR/{queue,reverb}.log" >&2; exit 1; }
 done
 
 cat <<EOF
 
   Running:
-    API      http://127.0.0.1:${APP_PORT}
+    API      ${APP_URL}   (nginx + PHP-FPM)
     Reverb   ws://127.0.0.1:${REVERB_PORT}
-    Queue    php artisan queue:listen
-  Logs: ${LOG_DIR}/serve.log, queue.log, reverb.log, laravel.log
+    Queue    ${QUEUES}
+  Logs: ${LOG_DIR}/queue.log, reverb.log, laravel.log, /var/log/nginx/error.log
 
-  Press Ctrl+C to stop.
+  Press Ctrl+C to stop the queue worker and Reverb (nginx keeps running).
 EOF
 
 wait -n "${pids[@]}"

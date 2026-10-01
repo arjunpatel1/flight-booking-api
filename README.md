@@ -1,6 +1,6 @@
 ## Local setup (one command)
 
-Prerequisites: **Git** only (VS Code optional). The script installs PHP 8.4, Composer, MySQL, Redis and Node.js, configures Reverb, creates the database, runs migrations and seeders, prints the login details and starts the API, queue worker and Reverb.
+Prerequisites: **Git** only (VS Code optional). The script installs PHP 8.4, Composer, nginx, MySQL, Redis and Node.js. It then configures nginx and Reverb, adds the local domains to the hosts file, creates the database, runs migrations and seeders, provisions a demo tenant, prints the login details and starts the stack.
 
 ```bash
 git clone <repo-url> && cd flight-booking-api
@@ -12,7 +12,12 @@ bash scripts/setup-local.sh
 setup-local.cmd
 ```
 
-Default login: `admin@myteknoland.com` / `12345678`. To start the servers again later, run `bash scripts/start-local.sh` on Ubuntu or `start-local.cmd` on Windows.
+| | URL | Login |
+|---|---|---|
+| Platform (super admin) | http://api.nexdine.test | `admin@myteknoland.com` / `12345678` |
+| Demo tenant | http://demo.nexdine.test | `admin@demo.nexdine.test` / `Demo@12345` |
+
+To start the stack again later, run `bash scripts/start-local.sh` on Ubuntu or `start-local.cmd` on Windows. On Ubuntu, nginx and PHP-FPM run as system services. On Windows, the start script runs nginx and php-cgi itself.
 
 <p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
 
