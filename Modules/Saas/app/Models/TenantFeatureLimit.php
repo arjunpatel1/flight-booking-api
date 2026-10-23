@@ -12,6 +12,8 @@ class TenantFeatureLimit extends Model
         'feature',
         'limit',
         'used',
+        'overage_allowed',
+        'overage_unit_price',
         'resets_at',
     ];
 
@@ -25,6 +27,8 @@ class TenantFeatureLimit extends Model
         return [
             'limit' => 'integer',
             'used' => 'integer',
+            'overage_allowed' => 'boolean',
+            'overage_unit_price' => 'float',
             'resets_at' => 'datetime',
         ];
     }

@@ -52,6 +52,11 @@ class CustomerExperienceController extends Controller
         $subtotal = max(0, $request->float('subtotal', 0));
         $offers = Voucher::query()
             ->where('is_active', true)
+            ->where(function ($query) {
+                $query->whereNull('conditions->channels')
+                    ->orWhereJsonLength('conditions->channels', 0)
+                    ->orWhereJsonContains('conditions->channels', 'restaurant');
+            })
             ->where(fn ($query) => $query->whereNull('branch_id')->orWhere('branch_id', $customer->branch_id))
             ->where(fn ($query) => $query->whereNull('start_date')->orWhereDate('start_date', '<=', today()))
             ->where(fn ($query) => $query->whereNull('end_date')->orWhereDate('end_date', '>=', today()))

@@ -25,6 +25,10 @@ enum DefaultRole: string
     case Kitchen = "kitchen";
     case Waiter = "waiter";
     case Customer = "customer";
+    case FlightAdmin = "flight_admin";
+    case FlightDistributor = "flight_distributor";
+    case FlightAgent = "flight_agent";
+    case FlightCustomer = "flight_customer";
 
     /**
      * Get branch available roles

@@ -45,6 +45,16 @@ class EnsureTenantPlanFeature
         }
 
         $tenant = Tenant::query()->withoutGlobalScopes()->whereKey($tenantId)->where('is_active', true)->first();
+
+        // Older/local tenants may predate subscription provisioning entirely.
+        // The web app treats an empty plan_features list as legacy access, so
+        // keep the API consistent until a subscription has actually been
+        // configured. Once a tenant has a subscription record (including an
+        // expired/cancelled one), normal entitlement checks remain enforced.
+        if ($tenant && ! $tenant->subscriptions()->withoutGlobalScopes()->exists()) {
+            return $next($request);
+        }
+
         $enabled = $tenant && collect($features)->contains(
             fn (string $feature) => $this->entitlements->has($tenant, $feature)
         );
@@ -54,7 +64,7 @@ class EnsureTenantPlanFeature
         }
 
         return new JsonResponse([
-            'message' => 'This feature is not included in the restaurant subscription.',
+            'message' => 'This feature is not included in your current subscription.',
             'errors' => [
                 'code' => 'PLAN_FEATURE_DISABLED',
                 'features' => $features,

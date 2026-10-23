@@ -1,0 +1,18 @@
+{
+    "name": "Flight",
+    "alias": "flight",
+    "description": "Multi-Tenant B2B/B2C Flight Booking SaaS Platform",
+    "keywords": [
+        "flight",
+        "booking",
+        "b2b",
+        "b2c",
+        "airline",
+        "airport"
+    ],
+    "priority": 160,
+    "providers": [
+        "Modules\\Flight\\Providers\\FlightServiceProvider"
+    ],
+    "files": []
+}

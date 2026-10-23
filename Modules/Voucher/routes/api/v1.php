@@ -3,7 +3,7 @@
 use Modules\Voucher\Http\Controllers\Api\V1\GiftCardController;
 use Modules\Voucher\Http\Controllers\Api\V1\VoucherController;
 
-Route::middleware('tenant.feature:coupons,gift_cards')->group(function () {
+Route::middleware('tenant.feature:coupons,flight_booking')->group(function () {
 Route::controller(VoucherController::class)
     ->prefix('vouchers')
     ->group(function () {
@@ -14,7 +14,9 @@ Route::controller(VoucherController::class)
         Route::put('/{id}', 'update')->middleware('can:admin.vouchers.edit');
         Route::delete('/{ids}', 'destroy')->middleware('can:admin.vouchers.destroy');
     });
+});
 
+Route::middleware('tenant.feature:gift_cards')->group(function () {
 Route::controller(GiftCardController::class)
     ->prefix('gift-cards')
     ->group(function () {

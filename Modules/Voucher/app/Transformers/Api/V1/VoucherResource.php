@@ -25,6 +25,7 @@ class VoucherResource extends JsonResource
                 "name" => $this->relationLoaded("branch") ? $this->branch?->name : "",
             ],
             "is_active" => $this->is_active,
+            "flight_auto_apply" => (bool) data_get($this->meta, 'flight_auto_apply', false),
             "used" => $this->used,
             "updated_at" => dateTimeFormat($this->updated_at),
             "created_at" => dateTimeFormat($this->created_at),
