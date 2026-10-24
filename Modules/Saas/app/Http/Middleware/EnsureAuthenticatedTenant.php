@@ -5,6 +5,7 @@ namespace Modules\Saas\Http\Middleware;
 use Closure;
 use Illuminate\Http\Request;
 use Modules\Branch\Models\Branch;
+use Modules\Flight\Models\FlightCustomer;
 use Modules\Saas\Support\TenantContext;
 use Modules\Support\ApiResponse;
 use Modules\User\Enums\DefaultRole;
@@ -20,6 +21,29 @@ class EnsureAuthenticatedTenant
     {
         $tenant = $this->context->get();
         $user = $request->user();
+
+        // Flight customers authenticate through their own Sanctum model and
+        // do not have staff tenant/role helpers such as isSuperAdmin(). Their
+        // customer-auth endpoints enforce ownership using the customer token.
+        if ($user instanceof FlightCustomer && $request->is('api/v1/flight/customer-auth/*')) {
+            return $next($request);
+        }
+
+        // When running on localhost/loopback or servicing flight-domain APIs,
+        // resolve tenant context from the authenticated user if the browser host
+        // does not specify a distinct tenant subdomain.
+        if ($tenant === null && $user !== null && $user->assignedToTenant()) {
+            $origin = $request->headers->get('Origin') ?? $request->headers->get('Referer');
+            $host = $origin ? parse_url($origin, PHP_URL_HOST) : $request->getHost();
+            if (in_array($host, ['localhost', '127.0.0.1', '::1'], true) || $request->is('api/v1/flight/*') || app()->environment('local', 'testing')) {
+                $tenant = $user->tenant;
+                if ($tenant) {
+                    $this->context->set($tenant);
+                    $request->attributes->set('tenant', $tenant);
+                    $request->attributes->set('tenant_id', $tenant->id);
+                }
+            }
+        }
 
         // Browser requests always identify the page hostname. A restaurant
         // identity must never operate from a central/platform hostname, even
@@ -43,7 +67,14 @@ class EnsureAuthenticatedTenant
             $user !== null
             && ! $user->isSuperAdmin()
             && $user->assignedToTenant()
-            && ! $user->hasRole(DefaultRole::EnterpriseAdmin->value)
+            && ! $request->is('api/v1/flight/*')
+            && ! $user->hasRole([
+                DefaultRole::EnterpriseAdmin->value,
+                DefaultRole::FlightAdmin->value,
+                DefaultRole::FlightDistributor->value,
+                DefaultRole::FlightAgent->value,
+                DefaultRole::FlightCustomer->value,
+            ])
         ) {
             if (! $user->assignedToBranch()) {
                 return $this->denied($request, 'BRANCH_FORBIDDEN');

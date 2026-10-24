@@ -1,0 +1,27 @@
+{
+    "name": "nexdine/flight",
+    "description": "Multi-Tenant B2B/B2C Flight Booking SaaS Platform",
+    "authors": [
+        {
+            "name": "Flight Platform Team"
+        }
+    ],
+    "extra": {
+        "laravel": {
+            "providers": [],
+            "aliases": {}
+        }
+    },
+    "autoload": {
+        "psr-4": {
+            "Modules\\Flight\\": "app/",
+            "Modules\\Flight\\Database\\Factories\\": "database/factories/",
+            "Modules\\Flight\\Database\\Seeders\\": "database/seeders/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Modules\\Flight\\Tests\\": "tests/"
+        }
+    }
+}

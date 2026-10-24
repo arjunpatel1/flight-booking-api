@@ -37,6 +37,7 @@ return [
             'base_url' => env('RAZORPAY_BASE_URL', 'https://api.razorpay.com/v1'),
             'key_id' => env('RAZORPAY_KEY_ID'),
             'key_secret' => env('RAZORPAY_KEY_SECRET'),
+            'ca_bundle' => env('RAZORPAY_CA_BUNDLE'),
             'capture_authorized' => filter_var(env('RAZORPAY_CAPTURE_AUTHORIZED', true), FILTER_VALIDATE_BOOLEAN),
             'require_signature' => filter_var(env('RAZORPAY_REQUIRE_SIGNATURE', true), FILTER_VALIDATE_BOOLEAN),
             'http_timeout_seconds' => (int) env('RAZORPAY_HTTP_TIMEOUT', 20),

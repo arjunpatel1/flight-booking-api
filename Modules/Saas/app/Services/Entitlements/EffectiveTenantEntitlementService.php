@@ -100,6 +100,30 @@ class EffectiveTenantEntitlementService
             $features->push('whatsapp_ordering');
         }
 
+        if ($features->intersect([
+            'pos',
+            'kitchen',
+            'dining_tables',
+            'online_ordering',
+            'reservations',
+            'inventory',
+            'table_management',
+            'restaurant_management',
+        ])->isNotEmpty()) {
+            $features->push('restaurant_management');
+        }
+
+        if ($features->intersect([
+            'flight_b2b_network',
+            'flight_wallet',
+            'flight_inventory',
+            'flight_schedules',
+            'flight_fares',
+            'flight_booking',
+        ])->isNotEmpty()) {
+            $features->push('flight_booking');
+        }
+
         return $features->unique()->values()->all();
     }
 

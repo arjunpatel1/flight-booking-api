@@ -93,6 +93,11 @@ class Voucher extends Model
      */
     protected array $translatable = ['name', 'description'];
 
+    protected $casts = [
+        'conditions' => 'array',
+        'meta' => 'array',
+    ];
+
     /**
      * Find by code
      *
@@ -145,8 +150,20 @@ class Voucher extends Model
             "to",
             "type",
             self::ACTIVE_COLUMN_NAME,
-            self::BRANCH_COLUMN_NAME
+            self::BRANCH_COLUMN_NAME,
+            'flight_auto_apply',
         ];
+    }
+
+    public function scopeWhereFlightAutoApply(Builder $query, mixed $enabled): void
+    {
+        if (filter_var($enabled, FILTER_VALIDATE_BOOLEAN)) {
+            $query->where('meta->flight_auto_apply', true);
+        } else {
+            $query->where(fn (Builder $builder) => $builder
+                ->whereNull('meta->flight_auto_apply')
+                ->orWhere('meta->flight_auto_apply', false));
+        }
     }
 
     /**

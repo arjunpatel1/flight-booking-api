@@ -41,6 +41,7 @@ class DiscountApplyService implements DiscountApplyServiceInterface
                 VoucherExists::class,
                 \Modules\Voucher\Checkers\AlreadyApplied::class . ':' . $cart,
                 ValidVoucher::class,
+                \Modules\Voucher\Checkers\ApplicableChannel::class . ':restaurant',
                 \Modules\Voucher\Checkers\ApplicableCustomer::class . ':' . $cart,
                 \Modules\Voucher\Checkers\ApplicableHasItems::class . ':' . $cart,
                 \Modules\Voucher\Checkers\ApplicableBranch::class . ':' . $cart,

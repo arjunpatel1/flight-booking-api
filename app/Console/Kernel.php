@@ -32,6 +32,14 @@ class Kernel extends ConsoleKernel
             ->withoutOverlapping()
             ->onQueue('voice');
 
+        // Auto-expire flight inventory holds and reservations every minute
+        $schedule->call(function () {
+            try {
+                app(\Modules\Flight\Services\Hold\FlightHoldService::class)->expireActiveHolds();
+                app(\Modules\Flight\Services\Inventory\FlightInventoryAllocationEngine::class)->expireReservations();
+            } catch (\Throwable $e) {}
+        })->everyMinute()->name('flight-expire-holds');
+
     }
 
     /**

@@ -38,5 +38,6 @@
     "Import": true,
     "Voice": true,
     "WhatsAppCenter": true,
-    "FinancialDashboard": true
+    "FinancialDashboard": true,
+    "Flight": true
 }

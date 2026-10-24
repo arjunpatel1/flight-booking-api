@@ -79,11 +79,17 @@ function Get-EnvValue([string]$Key) {
 
 function Php-Version {
     if (-not (Has php)) { return [version]'0.0' }
-    return [version](& php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')
+
+    $versionText = (& php -r "echo PHP_MAJOR_VERSION . '.' . PHP_MINOR_VERSION;") | Out-String
+    $versionText = $versionText.Trim()
+    if (-not $versionText) { return [version]'0.0' }
+
+    return [version]$versionText
 }
 
 # --- Scoop + tools -----------------------------------------------------------
 Refresh-Path
+$ScoopCmd = 'scoop'
 if (-not (Has scoop)) {
     Step 'Installing Scoop package manager'
     $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
@@ -93,23 +99,28 @@ if (-not (Has scoop)) {
     Refresh-Path
     $env:Path = "$env:USERPROFILE\scoop\shims;$env:Path"
 }
+if (Test-Path "$env:USERPROFILE\scoop\shims\scoop.cmd") {
+    $ScoopCmd = "$env:USERPROFILE\scoop\shims\scoop.cmd"
+} elseif (Has scoop) {
+    $ScoopCmd = (Get-Command scoop).Source
+}
 
-if (-not (Has git)) { Step 'Installing Git'; Run scoop install git }
+if (-not (Has git)) { Step 'Installing Git'; Run $ScoopCmd install git }
 
 if ((Php-Version) -lt [version]'8.4') {
     Step 'Installing PHP 8.4'
-    scoop bucket add versions | Out-Null
-    scoop install php84
-    if ($LASTEXITCODE -ne 0) { Run scoop install php }
+    & $ScoopCmd bucket add versions | Out-Null
+    & $ScoopCmd install php84
+    if ($LASTEXITCODE -ne 0) { Run $ScoopCmd install php }
 }
 
-if (-not (Has composer)) { Step 'Installing Composer'; Run scoop install composer }
+if (-not (Has composer)) { Step 'Installing Composer'; Run $ScoopCmd install composer }
 
-if (-not (Has redis-server)) { Step 'Installing Redis'; Run scoop install redis }
+if (-not (Has redis-server)) { Step 'Installing Redis'; Run $ScoopCmd install redis }
 
-if (-not (Has nginx)) { Step 'Installing nginx'; Run scoop install nginx }
+if (-not (Has nginx)) { Step 'Installing nginx'; Run $ScoopCmd install nginx }
 
-if (-not $SkipNpm -and -not (Has node)) { Step 'Installing Node.js LTS'; Run scoop install nodejs-lts }
+if (-not $SkipNpm -and -not (Has node)) { Step 'Installing Node.js LTS'; Run $ScoopCmd install nodejs-lts }
 
 # --- PHP extensions ----------------------------------------------------------
 Step 'Enabling PHP extensions'
@@ -138,7 +149,7 @@ foreach ($ext in $extensions) {
 
 # --- MySQL -------------------------------------------------------------------
 if (-not (Test-Port 3306)) {
-    if (-not (Has mysqld)) { Step 'Installing MySQL'; Run scoop install mysql }
+    if (-not (Has mysqld)) { Step 'Installing MySQL'; Run $ScoopCmd install mysql }
     Step 'Starting MySQL'
     $mysqld = (Get-Command mysqld).Source
     Start-Process -FilePath $mysqld -WindowStyle Hidden
@@ -176,7 +187,7 @@ FLUSH PRIVILEGES;
 $env:MYSQL_PWD = $MysqlRootPassword
 $sql | & mysql -u root -h 127.0.0.1 -P 3306
 $mysqlExit = $LASTEXITCODE
-Remove-Item Env:\MYSQL_PWD
+if (Test-Path Env:\MYSQL_PWD) { Remove-Item Env:\MYSQL_PWD }
 if ($mysqlExit -ne 0) { throw 'Could not create the database. Pass the MySQL root password with -MysqlRootPassword.' }
 
 # --- Application -------------------------------------------------------------
@@ -248,7 +259,7 @@ $nginxPrefix = Join-Path $PWD 'storage\nginx'
 foreach ($dir in 'conf', 'logs', 'temp\client_body_temp', 'temp\proxy_temp', 'temp\fastcgi_temp', 'temp\uwsgi_temp', 'temp\scgi_temp') {
     New-Item -ItemType Directory -Force -Path (Join-Path $nginxPrefix $dir) | Out-Null
 }
-$nginxHome = (& scoop prefix nginx).Trim()
+$nginxHome = (& $ScoopCmd prefix nginx).Trim()
 Copy-Item (Join-Path $nginxHome 'conf\mime.types') (Join-Path $nginxPrefix 'conf') -Force
 Copy-Item (Join-Path $nginxHome 'conf\fastcgi_params') (Join-Path $nginxPrefix 'conf') -Force
 $publicDir = (Join-Path $PWD 'public') -replace '\\', '/'

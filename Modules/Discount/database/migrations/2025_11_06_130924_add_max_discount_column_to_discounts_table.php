@@ -10,9 +10,11 @@ return new class extends Migration {
      */
     public function up(): void
     {
-        Schema::table('discounts', function (Blueprint $table) {
-            $table->decimal('max_discount', 18, 4)->unsigned()->nullable();
-        });
+        if (! Schema::hasColumn('discounts', 'max_discount')) {
+            Schema::table('discounts', function (Blueprint $table) {
+                $table->decimal('max_discount', 18, 4)->unsigned()->nullable();
+            });
+        }
     }
 
     /**
