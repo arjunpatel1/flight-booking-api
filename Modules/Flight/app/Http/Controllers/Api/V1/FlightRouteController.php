@@ -108,9 +108,26 @@ class FlightRouteController extends Controller
     public function destroy(int $id): JsonResponse
     {
         $route = FlightRoute::findOrFail($id);
-        $route->delete();
 
-        return ApiResponse::success(null, 'Flight route deleted successfully');
+        try {
+            DB::transaction(function () use ($route) {
+                // Delete associated flight schedules if they have no active flight instances
+                $route->schedules()->delete();
+                $route->delete();
+            });
+
+            return ApiResponse::success(null, 'Flight route deleted successfully');
+        } catch (\Illuminate\Database\QueryException $e) {
+            return ApiResponse::error(
+                'Cannot delete this flight route because active flight bookings or generated flight instances depend on it.',
+                422
+            );
+        } catch (\Throwable $e) {
+            return ApiResponse::error(
+                'Failed to delete flight route: ' . $e->getMessage(),
+                500
+            );
+        }
     }
 
     /**
