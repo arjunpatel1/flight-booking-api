@@ -108,7 +108,7 @@ class FlightSupplierController extends Controller
             'endpoint_url'         => $data['endpoint_url'],
             'backup_endpoint_url'  => $data['backup_endpoint_url'] ?? null,
             'currency'             => $data['currency'] ?? 'INR',
-            'supported_cabins'     => $data['supported_cabins'] ?? FlightCabinClass::query()->where('is_active', true)->orderBy('sort_order')->pluck('code')->all(),
+            'supported_cabins'     => $data['supported_cabins'] ?? FlightCabinClass::query()->where('is_active', true)->orderBy('sort_order')->pluck('code')->unique()->values()->all(),
             'supported_operations' => $data['supported_operations'] ?? ['search', 'price', 'hold', 'book', 'ticket', 'cancel', 'refund'],
             'timeout_ms'           => $data['timeout_ms'] ?? 10000,
         ]);

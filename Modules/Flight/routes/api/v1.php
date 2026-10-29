@@ -31,13 +31,20 @@ use Modules\Flight\Http\Controllers\Api\V1\FlightSettlementController;
 use Modules\Flight\Http\Controllers\Api\V1\FlightNotificationController;
 use Modules\Flight\Http\Controllers\Api\V1\FlightWebhookController;
 use Modules\Flight\Http\Controllers\Api\V1\FlightCustomerAuthController;
+use Modules\Flight\Http\Middleware\EnsureFlightBookingAccess;
 use Modules\Saas\Http\Middleware\EnsureAuthenticatedTenant;
 
 Route::prefix('flight')->group(function () {
     // Public reference metadata, directory lookups, customer flight search
     Route::withoutMiddleware(['auth', EnsureAuthenticatedTenant::class])->group(function () {
-        Route::post('/customer-auth/register', [FlightCustomerAuthController::class, 'register'])->middleware('throttle:login');
-        Route::post('/customer-auth/login', [FlightCustomerAuthController::class, 'login'])->middleware('throttle:login');
+        // Separate budgets: mistakes on the sign-up form never block logging in.
+        Route::post('/customer-auth/register', [FlightCustomerAuthController::class, 'register'])->middleware('throttle:flight-customer-register');
+        Route::post('/customer-auth/login', [FlightCustomerAuthController::class, 'login'])->middleware('throttle:flight-customer-login');
+        // Send/verify/resend happen within a minute, so the 3/min login limiter
+        // is too tight. FlightCustomerOtpService also caps sends per number and
+        // wrong guesses per code.
+        Route::post('/customer-auth/otp/request', [FlightCustomerAuthController::class, 'requestOtp'])->middleware('throttle:10,1');
+        Route::post('/customer-auth/otp/verify', [FlightCustomerAuthController::class, 'verifyOtp'])->middleware('throttle:10,1');
 
         Route::get('/booking-options/resolve', [FlightFareController::class, 'resolveBookingOption']);
 
@@ -72,44 +79,57 @@ Route::prefix('flight')->group(function () {
 
         // Phase 13: Flight Booking Lifecycle (Public / Guest / Customer)
         Route::post('/bookings', [FlightBookingController::class, 'createBooking']);
-        Route::get('/bookings/{identifier}', [FlightBookingController::class, 'getBooking']);
-        Route::get('/bookings/{identifier}/status', [FlightBookingController::class, 'bookingStatus']);
-        Route::post('/bookings/{identifier}/confirm', [FlightBookingController::class, 'confirmBooking']);
-        Route::post('/bookings/{identifier}/cancel', [FlightBookingController::class, 'cancelBooking']);
-        Route::put('/bookings/{identifier}/passengers/{passengerId}', [FlightBookingController::class, 'updatePassenger']);
 
         // Phase 14: Ancillaries, Seat Map, Seat Locking & Passenger Selection
         Route::get('/inventories/{inventoryId}/seat-map', [FlightAncillaryController::class, 'getSeatMap']);
         Route::post('/inventories/{inventoryId}/seats/lock', [FlightAncillaryController::class, 'lockSeat']);
         Route::post('/inventories/{inventoryId}/seats/release', [FlightAncillaryController::class, 'releaseSeatLock']);
         Route::get('/inventories/{inventoryId}/ancillaries', [FlightAncillaryController::class, 'getAncillaries']);
-        Route::post('/bookings/{identifier}/ancillaries', [FlightAncillaryController::class, 'addAncillaryToBooking']);
-        Route::delete('/bookings/{identifier}/ancillaries/{ancillaryId}', [FlightAncillaryController::class, 'removeAncillaryFromBooking']);
 
-        // Phase 15: Flight Payment Gateway & Verification
-        Route::post('/bookings/{identifier}/payment', [FlightPaymentController::class, 'initiate']);
-        Route::post('/payments/{reference}/verify', [FlightPaymentController::class, 'verify']);
-        Route::get('/payments/{reference}', [FlightPaymentController::class, 'show']);
-        Route::get('/bookings/{identifier}/payment-options', [FlightPaymentController::class, 'paymentOptions']);
+        // Phase 15 / 21: gateway callbacks are signature-checked, not token-checked.
         Route::post('/payments/webhook/{gateway}', [FlightPaymentController::class, 'webhook']);
-
-        // Phase 21: Public Webhook Ingestion & Customer Booking Notifications
         Route::post('/webhooks/{provider}', [FlightWebhookController::class, 'handleWebhook']);
-        Route::get('/bookings/{identifier}/notifications', [FlightNotificationController::class, 'bookingNotifications']);
 
-        // Phase 16: PNR, E-Ticket Issuance & Download
-        Route::post('/bookings/{identifier}/issue-ticket', [FlightTicketController::class, 'issueTicket']);
-        Route::get('/bookings/{identifier}/ticket', [FlightTicketController::class, 'showTicket']);
-        Route::get('/bookings/{identifier}/eticket/download', [FlightTicketController::class, 'downloadEticket']);
-        Route::get('/bookings/{identifier}/eticket/preview', [FlightTicketController::class, 'previewEticket']);
+        // A booking reference is printed on tickets and ids are sequential, so
+        // these need staff, the owning customer, or the guest's booking token.
+        Route::middleware(EnsureFlightBookingAccess::class)->group(function () {
+            Route::get('/bookings/{identifier}', [FlightBookingController::class, 'getBooking']);
+            Route::get('/bookings/{identifier}/status', [FlightBookingController::class, 'bookingStatus']);
 
-        // Phase 17: Cancellation, Refunds & Rescheduling (Servicing)
-        Route::get('/bookings/{identifier}/servicing', [FlightServicingController::class, 'show']);
-        Route::get('/bookings/{identifier}/cancellation-quote', [FlightServicingController::class, 'quoteCancellation']);
-        Route::post('/bookings/{identifier}/cancel-servicing', [FlightServicingController::class, 'cancel']);
-        Route::get('/bookings/{identifier}/reschedule/search', [FlightServicingController::class, 'searchReplacement']);
-        Route::post('/bookings/{identifier}/reschedule', [FlightServicingController::class, 'reschedule']);
+            Route::post('/bookings/{identifier}/ancillaries', [FlightAncillaryController::class, 'addAncillaryToBooking']);
+            Route::delete('/bookings/{identifier}/ancillaries/{ancillaryId}', [FlightAncillaryController::class, 'removeAncillaryFromBooking']);
+
+            Route::post('/bookings/{identifier}/payment', [FlightPaymentController::class, 'initiate']);
+            Route::post('/payments/{reference}/verify', [FlightPaymentController::class, 'verify']);
+            Route::get('/payments/{reference}', [FlightPaymentController::class, 'show']);
+            Route::get('/bookings/{identifier}/payment-options', [FlightPaymentController::class, 'paymentOptions']);
+
+            Route::get('/bookings/{identifier}/notifications', [FlightNotificationController::class, 'bookingNotifications']);
+
+            Route::post('/bookings/{identifier}/issue-ticket', [FlightTicketController::class, 'issueTicket']);
+            Route::get('/bookings/{identifier}/ticket', [FlightTicketController::class, 'showTicket']);
+            Route::get('/bookings/{identifier}/eticket/download', [FlightTicketController::class, 'downloadEticket']);
+            Route::get('/bookings/{identifier}/eticket/preview', [FlightTicketController::class, 'previewEticket']);
+        });
     });
+
+    // Staff-only booking actions (admin Booking Details / Bookings pages).
+    // Previously public: anyone with a booking reference could mark it paid,
+    // cancel it (which now issues a refund) or edit its passengers.
+    Route::post('/bookings/{identifier}/confirm', [FlightBookingController::class, 'confirmBooking']);
+    Route::post('/bookings/{identifier}/cancel', [FlightBookingController::class, 'cancelBooking']);
+    Route::put('/bookings/{identifier}/passengers/{passengerId}', [FlightBookingController::class, 'updatePassenger']);
+
+    // Phase 17: Cancellation, Refunds & Rescheduling (Servicing). Staff only:
+    // these used to sit in the public group above, so anyone holding a
+    // booking reference could cancel or reschedule it, or mark a refund paid.
+    Route::get('/bookings/{identifier}/servicing', [FlightServicingController::class, 'show']);
+    Route::get('/bookings/{identifier}/cancellation-quote', [FlightServicingController::class, 'quoteCancellation']);
+    Route::post('/bookings/{identifier}/cancel-servicing', [FlightServicingController::class, 'cancel']);
+    Route::get('/bookings/{identifier}/reschedule/search', [FlightServicingController::class, 'searchReplacement']);
+    Route::post('/bookings/{identifier}/reschedule', [FlightServicingController::class, 'reschedule']);
+    Route::post('/bookings/{identifier}/refunds/{refundId}/retry', [FlightServicingController::class, 'retryRefund'])->whereNumber('refundId');
+    Route::post('/bookings/{identifier}/refunds/{refundId}/mark-processed', [FlightServicingController::class, 'markRefundProcessed'])->whereNumber('refundId');
 
     Route::post('/customer-auth/logout', [FlightCustomerAuthController::class, 'logout'])
         ->middleware('auth:sanctum')
@@ -123,12 +143,20 @@ Route::prefix('flight')->group(function () {
     Route::get('/customer-auth/bookings/{identifier}/ticket/preview', [FlightCustomerAuthController::class, 'previewBookingTicket'])
         ->middleware('auth:sanctum')
         ->withoutMiddleware(['auth', EnsureAuthenticatedTenant::class]);
+    Route::get('/customer-auth/bookings/{identifier}/cancellation-quote', [FlightCustomerAuthController::class, 'cancellationQuote'])
+        ->middleware('auth:sanctum')
+        ->withoutMiddleware(['auth', EnsureAuthenticatedTenant::class]);
+    Route::post('/customer-auth/bookings/{identifier}/cancel', [FlightCustomerAuthController::class, 'cancelBooking'])
+        ->middleware(['auth:sanctum', 'throttle:10,1'])
+        ->withoutMiddleware(['auth', EnsureAuthenticatedTenant::class]);
 
     // Reference Management (Super Admin & Flight Admin)
     Route::get('/settings/booking-window', [FlightBookingSettingsController::class, 'show']);
     Route::put('/settings/booking-window', [FlightBookingSettingsController::class, 'update']);
     Route::get('/settings/ticket-advisory', [FlightBookingSettingsController::class, 'showTicketAdvisory']);
     Route::put('/settings/ticket-advisory', [FlightBookingSettingsController::class, 'updateTicketAdvisory']);
+    Route::get('/settings/refund-policy', [FlightBookingSettingsController::class, 'showRefundPolicy']);
+    Route::put('/settings/refund-policy', [FlightBookingSettingsController::class, 'updateRefundPolicy']);
     Route::put('/configuration/{key}', [FlightBookingSettingsController::class, 'updateConfiguration']);
 
     Route::post('/airports', [FlightAirportController::class, 'store']);

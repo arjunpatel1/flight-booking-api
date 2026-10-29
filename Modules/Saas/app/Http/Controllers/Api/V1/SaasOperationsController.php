@@ -139,7 +139,7 @@ class SaasOperationsController extends Controller
                 Rule::unique('tenants', 'domain'),
             ],
         ], [
-            'domain.regex' => 'Enter a valid domain only, for example redison-blu.nexdine.myteknoland.net. Do not include https://, paths, spaces, or uppercase branding text.',
+            'domain.regex' => 'Enter a valid domain only, for example booking.crttravels.com. Do not include https://, paths, spaces, or uppercase branding text.',
         ]);
 
         $domain = $data['domain'];
@@ -162,7 +162,7 @@ class SaasOperationsController extends Controller
             'message' => empty($records)
                 ? 'Domain format is valid, but DNS is not resolving yet.'
                 : ($pointsToServer === false
-                    ? 'Domain resolves, but it is not pointing to the NexDine tenant server.'
+                    ? 'Domain resolves, but it is not pointing to the flight booking tenant server.'
                     : 'Domain is valid and ready to use.'),
         ]);
     }
@@ -283,7 +283,7 @@ class SaasOperationsController extends Controller
             'gst_number' => ['nullable', 'string', 'max:40'], 'currency' => ['required', 'string', 'size:3'],
             'timezone' => ['required', 'string', 'max:80'],
         ], [
-            'domain.regex' => 'Enter a valid domain only, for example redison-blu.nexdine.myteknoland.net. Do not include https://, paths, spaces, or uppercase branding text.',
+            'domain.regex' => 'Enter a valid domain only, for example booking.crttravels.com. Do not include https://, paths, spaces, or uppercase branding text.',
         ]);
         $result = $service->complete($tenant, $data);
 
@@ -291,7 +291,7 @@ class SaasOperationsController extends Controller
             'tenant' => new TenantResource($result['tenant']),
             'subscription' => $result['subscription'],
             'provisioning' => $this->provisioningPayload($result['provisioning_run'], $orchestrator),
-        ], 'Restaurant onboarding started.');
+        ], 'Flight tenant onboarding started.');
     }
 
     public function retryProvisioning(Request $request, string $uuid, ProvisioningOrchestratorService $orchestrator): JsonResponse
@@ -801,6 +801,10 @@ class SaasOperationsController extends Controller
             DefaultRole::Kitchen->value => 'Kitchen display, preparation workflow, and order status operations.',
             DefaultRole::Waiter->value => 'Tables, orders, payments, and waiter application workflows.',
             DefaultRole::Customer->value => 'Customer application identity without restaurant administration access.',
+            DefaultRole::FlightAdmin->value => 'Flight agency administrator: inventory, fares, bookings, refunds, and B2B network.',
+            DefaultRole::FlightDistributor->value => 'Flight distributor managing sub-agents, wallets, and commissions.',
+            DefaultRole::FlightAgent->value => 'Flight agent searching, booking, and servicing tickets for customers.',
+            DefaultRole::FlightCustomer->value => 'Flight customer identity for bookings and e-tickets, without admin access.',
         ];
 
         $roleCatalog = collect(DefaultRole::cases())->map(function (DefaultRole $defaultRole) use (
@@ -815,7 +819,8 @@ class SaasOperationsController extends Controller
                 : collect($role?->permissions ?? [])->pluck('name')->values();
             $scope = match ($defaultRole) {
                 DefaultRole::SuperAdmin, DefaultRole::Admin => 'platform',
-                DefaultRole::Customer => 'customer',
+                DefaultRole::Customer, DefaultRole::FlightCustomer => 'customer',
+                DefaultRole::FlightAdmin, DefaultRole::FlightDistributor, DefaultRole::FlightAgent => 'flight',
                 default => 'restaurant',
             };
 

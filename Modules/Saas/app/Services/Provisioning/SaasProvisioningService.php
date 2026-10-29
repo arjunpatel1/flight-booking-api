@@ -312,9 +312,17 @@ class SaasProvisioningService
             return null;
         }
 
-        $role = DefaultRole::tryFrom($data['staff_role'] ?? DefaultRole::Waiter->value);
-        if (! $role || ! in_array($role, [DefaultRole::Manager, DefaultRole::Cashier, DefaultRole::Kitchen, DefaultRole::Waiter], true)) {
-            $role = DefaultRole::Waiter;
+        $role = DefaultRole::tryFrom($data['staff_role'] ?? DefaultRole::FlightAgent->value);
+        if (! $role || ! in_array($role, [
+            DefaultRole::FlightAdmin,
+            DefaultRole::FlightAgent,
+            DefaultRole::FlightDistributor,
+            DefaultRole::Manager,
+            DefaultRole::Cashier,
+            DefaultRole::Kitchen,
+            DefaultRole::Waiter,
+        ], true)) {
+            $role = DefaultRole::FlightAgent;
         }
 
         $user = User::query()->withoutGlobalScopes()->updateOrCreate(

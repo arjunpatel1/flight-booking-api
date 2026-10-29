@@ -49,6 +49,16 @@ final class ApiResponse
     }
 
     /**
+     * Error with a message only. Several controllers (wallets, routes,
+     * settlements) call this; it was missing, so their error paths crashed
+     * with a 500 instead of returning the message.
+     */
+    public static function error(string $message, int $code = Response::HTTP_BAD_REQUEST, mixed $errors = null): JsonResponse
+    {
+        return self::response(null, $message, $errors, $code);
+    }
+
+    /**
      * Response handler
      *
      * @param mixed $body

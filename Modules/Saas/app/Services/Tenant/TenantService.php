@@ -266,6 +266,12 @@ class TenantService implements TenantServiceInterface
             $this->hasProvisioningRunsTable()
                 ? 'latestProvisioningRun:id,uuid,saas_provisioning_runs.tenant_id,status,progress,current_step,error,started_at,completed_at,failed_at,updated_at'
                 : null,
+            // Admin accounts only, so the registry shows who actually signs in
+            // (TenantResource::ownerUser) instead of a stale contact email.
+            'users' => fn ($query) => $query
+                ->select(['id', 'tenant_id', 'branch_id', 'name', 'username', 'email', 'is_active', 'mfa_enabled', 'created_at', 'updated_at'])
+                ->whereHas('roles', fn ($roles) => $roles->whereIn('name', ['enterprise_admin', 'admin_branch'])),
+            'users.roles:id,name',
         ]);
     }
 

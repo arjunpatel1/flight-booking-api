@@ -11,7 +11,7 @@
 # (scripts/start-local.sh). Safe to re-run: every step is idempotent.
 #
 # Overridable environment variables:
-#   DB_DATABASE      default: nexdine
+#   DB_DATABASE      default: flight_booking
 #   DB_USERNAME      default: nexdine
 #   DB_PASSWORD      default: secret
 #   ROOT_DOMAIN      default: nexdine.test   (API: api.<root>, tenant: <slug>.<root>)
@@ -27,7 +27,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 PROJECT_DIR=$(pwd)
 
-DB_DATABASE=${DB_DATABASE:-nexdine}
+DB_DATABASE=${DB_DATABASE:-flight_booking}
 DB_USERNAME=${DB_USERNAME:-nexdine}
 DB_PASSWORD=${DB_PASSWORD:-secret}
 ROOT_DOMAIN=${ROOT_DOMAIN:-nexdine.test}

@@ -6,6 +6,7 @@ use DomainException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Modules\Core\Http\Controllers\Controller;
+use Modules\Flight\Enums\RefundStatus;
 use Modules\Flight\Models\FlightBooking;
 use Modules\Flight\Services\Servicing\FlightServicingService;
 use Modules\Saas\Support\TenantContext;
@@ -153,10 +154,62 @@ class FlightServicingController extends Controller
         }
     }
 
+    /**
+     * Retry a pending/failed gateway refund (e.g. after Razorpay was unreachable,
+     * or once online refunds are switched on).
+     * POST /api/v1/flight/bookings/{identifier}/refunds/{refundId}/retry
+     */
+    public function retryRefund(Request $request, string $identifier, int $refundId): JsonResponse
+    {
+        $booking = $this->resolveBooking($identifier, app(TenantContext::class)->id());
+        $refund = $booking->refunds()->whereKey($refundId)->firstOrFail();
+
+        $refund = $this->servicingService->processGatewayRefund($refund);
+
+        return response()->json([
+            'success' => $refund->status === RefundStatus::PROCESSED,
+            'message' => $refund->status === RefundStatus::PROCESSED ? 'Refund sent.' : ($refund->failure_reason ?: 'Refund is still pending.'),
+            'body'    => FlightBookingController::refundPayload($refund),
+        ], $refund->status === RefundStatus::PROCESSED ? 200 : 422);
+    }
+
+    /**
+     * Record a refund paid outside the system (Razorpay dashboard, bank transfer).
+     * POST /api/v1/flight/bookings/{identifier}/refunds/{refundId}/mark-processed
+     */
+    public function markRefundProcessed(Request $request, string $identifier, int $refundId): JsonResponse
+    {
+        $data = $request->validate(['reference' => ['required', 'string', 'max:100']]);
+        $booking = $this->resolveBooking($identifier, app(TenantContext::class)->id());
+        $refund = $booking->refunds()->whereKey($refundId)->firstOrFail();
+
+        try {
+            $refund = $this->servicingService->markRefundProcessedManually(
+                $refund,
+                trim($data['reference']),
+                $request->user()?->email ?? 'admin',
+            );
+        } catch (DomainException $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Refund marked as processed.',
+            'body'    => FlightBookingController::refundPayload($refund),
+        ]);
+    }
+
     protected function resolveBooking(string $identifier, ?int $tenantId): FlightBooking
     {
-        $query = FlightBooking::where('booking_reference', $identifier)
-            ->orWhere('id', is_numeric($identifier) ? (int) $identifier : 0);
+        // Group the identifier match: "ref = X OR id = Y AND tenant = Z" would let
+        // a booking reference from another tenant bypass the tenant filter.
+        $query = FlightBooking::where(function ($match) use ($identifier) {
+            $match->where('booking_reference', $identifier);
+            if (is_numeric($identifier)) {
+                $match->orWhere('id', (int) $identifier);
+            }
+        });
 
         if ($tenantId) {
             $query->where('tenant_id', $tenantId);

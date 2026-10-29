@@ -7,6 +7,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Modules\Core\Http\Controllers\Controller;
+use Modules\Flight\Services\Catalog\FlightCatalogTenant;
 use Modules\Flight\Models\FlightAirport;
 use Modules\Flight\Models\FlightAirline;
 use Modules\Flight\Services\Search\DTOs\FlightSearchParams;
@@ -52,7 +53,7 @@ class FlightSearchController extends Controller
             'adults'                => 'nullable|integer|min:1|max:9',
             'children'              => 'nullable|integer|min:0|max:9',
             'infants'               => 'nullable|integer|min:0|max:9',
-            'cabin_class'           => ['nullable', 'string', Rule::exists('flight_cabin_classes', 'code')->where('is_active', true)],
+            'cabin_class'           => ['nullable', 'string', FlightCatalogTenant::activeCabinClass()],
             'airlines'              => 'nullable|array',
             'airlines.*'            => 'string|size:2',
             'max_stops'             => 'nullable|integer|min:0|max:3',
@@ -93,7 +94,7 @@ class FlightSearchController extends Controller
             'adults'                => 'nullable|integer|min:1|max:9',
             'children'              => 'nullable|integer|min:0|max:9',
             'infants'               => 'nullable|integer|min:0|max:9',
-            'cabin_class'           => ['nullable', 'string', Rule::exists('flight_cabin_classes', 'code')->where('is_active', true)],
+            'cabin_class'           => ['nullable', 'string', FlightCatalogTenant::activeCabinClass()],
             'currency'              => 'nullable|string|size:3',
             'sort_by'               => 'nullable|string|in:recommended,price_asc,price_desc,duration_asc,departure_asc,departure_desc',
             'tenant_id'             => 'nullable|integer|exists:tenants,id',
@@ -147,8 +148,9 @@ class FlightSearchController extends Controller
      */
     public function filters(Request $request): JsonResponse
     {
-        $airports = FlightAirport::active()->take(20)->get(['iata_code', 'name', 'city', 'country']);
-        $airlines = FlightAirline::active()->get(['iata_code', 'name']);
+        // Cross-tenant public search sees every tenant's copy; list each code once.
+        $airports = FlightAirport::active()->get(['iata_code', 'name', 'city', 'country'])->unique('iata_code')->take(20)->values();
+        $airlines = FlightAirline::active()->get(['iata_code', 'name'])->unique('iata_code')->values();
 
         return ApiResponse::success([
             'popular_airports' => $airports,
@@ -174,8 +176,8 @@ class FlightSearchController extends Controller
      */
     public function workspace(Request $request)
     {
-        $airports = FlightAirport::active()->get(['iata_code', 'name', 'city']);
-        $airlines = FlightAirline::active()->get(['iata_code', 'name']);
+        $airports = FlightAirport::active()->get(['iata_code', 'name', 'city'])->unique('iata_code')->values();
+        $airlines = FlightAirline::active()->get(['iata_code', 'name'])->unique('iata_code')->values();
 
         return view('flight::search.workspace', [
             'airports'       => $airports,

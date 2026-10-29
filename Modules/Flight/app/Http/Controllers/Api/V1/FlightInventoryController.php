@@ -6,6 +6,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Modules\Core\Http\Controllers\Controller;
+use Modules\Flight\Services\Catalog\FlightCatalogTenant;
 use Modules\Flight\Models\FlightInventory;
 use Modules\Support\ApiResponse;
 
@@ -69,20 +70,20 @@ class FlightInventoryController extends Controller
         if ($request->has('cabins') && is_array($request->input('cabins'))) {
             $common = $request->validate([
                 'tenant_id' => ['nullable', 'integer'],
-                'airline_id' => ['required', 'exists:flight_airlines,id'],
+                'airline_id' => ['required', FlightCatalogTenant::exists('flight_airlines')],
                 'flight_number' => ['required', 'string', 'max:20'],
-                'origin_airport_id' => ['required', 'exists:flight_airports,id'],
-                'destination_airport_id' => ['required', 'exists:flight_airports,id', 'different:origin_airport_id'],
+                'origin_airport_id' => ['required', FlightCatalogTenant::exists('flight_airports')],
+                'destination_airport_id' => ['required', FlightCatalogTenant::exists('flight_airports'), 'different:origin_airport_id'],
                 'departure_time' => ['required', 'string'],
                 'arrival_time' => ['required', 'string'],
                 'operating_days' => ['nullable', 'array'],
-                'aircraft_id' => ['nullable', 'exists:flight_aircraft,id'],
+                'aircraft_id' => ['nullable', FlightCatalogTenant::exists('flight_aircraft')],
                 'is_refundable' => ['nullable', 'boolean'],
                 'cancellation_policy' => ['nullable', 'string'],
                 'reschedule_policy' => ['nullable', 'string'],
                 'status' => ['nullable', 'string', 'in:active,inactive,suspended,cancelled'],
                 'cabins' => ['required', 'array', 'min:0'],
-                'cabins.*.cabin_class' => ['required', 'string', Rule::exists('flight_cabin_classes', 'code')->where('is_active', true)],
+                'cabins.*.cabin_class' => ['required', 'string', FlightCatalogTenant::activeCabinClass()],
                 'cabins.*.total_seats' => ['required', 'integer', 'min:0'],
                 'cabins.*.available_seats' => ['nullable', 'integer', 'min:0'],
                 'cabins.*.base_price' => ['required', 'numeric', 'min:0'],
@@ -169,15 +170,15 @@ class FlightInventoryController extends Controller
                 'max:64',
                 Rule::unique('flight_inventories', 'inventory_id')->where('tenant_id', $tenantId),
             ],
-            'airline_id' => ['required', 'exists:flight_airlines,id'],
+            'airline_id' => ['required', FlightCatalogTenant::exists('flight_airlines')],
             'flight_number' => ['required', 'string', 'max:20'],
-            'origin_airport_id' => ['required', 'exists:flight_airports,id'],
-            'destination_airport_id' => ['required', 'exists:flight_airports,id', 'different:origin_airport_id'],
+            'origin_airport_id' => ['required', FlightCatalogTenant::exists('flight_airports')],
+            'destination_airport_id' => ['required', FlightCatalogTenant::exists('flight_airports'), 'different:origin_airport_id'],
             'departure_time' => ['required', 'string'],
             'arrival_time' => ['required', 'string'],
             'operating_days' => ['nullable', 'array'],
-            'aircraft_id' => ['nullable', 'exists:flight_aircraft,id'],
-            'cabin_class' => ['required', 'string', Rule::exists('flight_cabin_classes', 'code')->where('is_active', true)],
+            'aircraft_id' => ['nullable', FlightCatalogTenant::exists('flight_aircraft')],
+            'cabin_class' => ['required', 'string', FlightCatalogTenant::activeCabinClass()],
             'total_seats' => ['required', 'integer', 'min:0'],
             'available_seats' => ['required', 'integer', 'min:0', 'lte:total_seats'],
             'baggage_policy' => ['nullable', 'array'],
@@ -221,15 +222,15 @@ class FlightInventoryController extends Controller
             : FlightInventory::where('inventory_id', $id)->firstOrFail();
 
         $validated = $request->validate([
-            'airline_id' => ['sometimes', 'required', 'exists:flight_airlines,id'],
+            'airline_id' => ['sometimes', 'required', FlightCatalogTenant::exists('flight_airlines')],
             'flight_number' => ['sometimes', 'required', 'string', 'max:20'],
-            'origin_airport_id' => ['sometimes', 'required', 'exists:flight_airports,id'],
-            'destination_airport_id' => ['sometimes', 'required', 'exists:flight_airports,id'],
+            'origin_airport_id' => ['sometimes', 'required', FlightCatalogTenant::exists('flight_airports')],
+            'destination_airport_id' => ['sometimes', 'required', FlightCatalogTenant::exists('flight_airports')],
             'departure_time' => ['sometimes', 'required', 'string'],
             'arrival_time' => ['sometimes', 'required', 'string'],
             'operating_days' => ['nullable', 'array'],
-            'aircraft_id' => ['nullable', 'exists:flight_aircraft,id'],
-            'cabin_class' => ['sometimes', 'required', 'string', Rule::exists('flight_cabin_classes', 'code')->where('is_active', true)],
+            'aircraft_id' => ['nullable', FlightCatalogTenant::exists('flight_aircraft')],
+            'cabin_class' => ['sometimes', 'required', 'string', FlightCatalogTenant::activeCabinClass()],
             'total_seats' => ['sometimes', 'required', 'integer', 'min:0'],
             'available_seats' => ['sometimes', 'required', 'integer', 'min:0'],
             'baggage_policy' => ['nullable', 'array'],
@@ -281,9 +282,9 @@ class FlightInventoryController extends Controller
     {
         $request->validate([
             'flight_number' => ['nullable', 'string'],
-            'origin_airport_id' => ['nullable', 'exists:flight_airports,id'],
-            'destination_airport_id' => ['nullable', 'exists:flight_airports,id'],
-            'cabin_class' => ['nullable', Rule::exists('flight_cabin_classes', 'code')->where('is_active', true)],
+            'origin_airport_id' => ['nullable', FlightCatalogTenant::exists('flight_airports')],
+            'destination_airport_id' => ['nullable', FlightCatalogTenant::exists('flight_airports')],
+            'cabin_class' => ['nullable', FlightCatalogTenant::activeCabinClass()],
             'seats_needed' => ['nullable', 'integer', 'min:0'],
         ]);
 

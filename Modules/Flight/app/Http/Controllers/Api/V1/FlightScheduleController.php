@@ -5,6 +5,7 @@ namespace Modules\Flight\Http\Controllers\Api\V1;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Modules\Core\Http\Controllers\Controller;
+use Modules\Flight\Services\Catalog\FlightCatalogTenant;
 use Modules\Flight\Models\FlightSchedule;
 use Modules\Support\ApiResponse;
 
@@ -18,7 +19,8 @@ class FlightScheduleController extends Controller
         $schedules = FlightSchedule::query()
             ->with(['route.originAirport', 'route.destinationAirport', 'airline'])
             ->filters($request->all())
-            ->sortBy($request->get('sort_by', 'created_at'), $request->get('sort_direction', 'desc'))
+            // HasSortBy takes a list of {key, order}, as in FlightRouteController.
+            ->sortBy([['key' => $request->get('sort_by', 'created_at'), 'order' => $request->get('sort_direction', 'desc')]])
             ->paginate($request->get('per_page', 20));
 
         return ApiResponse::pagination($schedules);
@@ -37,7 +39,7 @@ class FlightScheduleController extends Controller
         $validated = $request->validate([
             'tenant_id' => ['nullable', 'integer'],
             'route_id' => ['required', 'exists:flight_routes,id'],
-            'airline_id' => ['required', 'exists:flight_airlines,id'],
+            'airline_id' => ['required', FlightCatalogTenant::exists('flight_airlines')],
             'flight_number' => ['required', 'string', 'max:10'],
             'departure_time' => ['required', 'string'],
             'arrival_time' => ['required', 'string'],

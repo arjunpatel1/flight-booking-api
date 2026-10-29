@@ -14,6 +14,7 @@ use Modules\Notification\Models\TenantMailMessage;
 use Modules\Notification\Models\TenantMailThread;
 use Modules\Notification\Models\TenantMailAttachment;
 use Modules\Notification\Services\TenantMailboxAttachmentService;
+use Modules\Notification\Services\TenantMailerService;
 use Modules\Saas\Models\Tenant;
 use Modules\Support\ApiResponse;
 use Symfony\Component\HttpFoundation\Response;
@@ -70,6 +71,7 @@ class TenantMailboxController extends Controller
 
         return ApiResponse::success([
             'address' => $tenant->slug.'@'.config('services.mailgun.inbound_domain', 'myteknoland.in'),
+            'sender_address' => app(TenantMailerService::class)->senderAddress($tenantId),
             'counts' => [
                 'all' => (clone $threads)->count(),
                 'inbox' => (clone $threads)->whereHas('messages', fn ($query) => $query
@@ -124,7 +126,7 @@ class TenantMailboxController extends Controller
         ]);
     }
 
-    public function send(Request $request, TenantMailboxAttachmentService $attachments): JsonResponse
+    public function send(Request $request, TenantMailboxAttachmentService $attachments, TenantMailerService $mailers): JsonResponse
     {
         $data = $request->validate([
             'to' => ['required', 'email:rfc', 'max:255'],
@@ -137,7 +139,10 @@ class TenantMailboxController extends Controller
         ]);
         $tenantId = $this->tenantId($request);
         $tenant = Tenant::query()->withoutGlobalScopes()->findOrFail($tenantId);
-        $from = $tenant->slug.'@'.config('services.mailgun.inbound_domain', 'myteknoland.in');
+        // With their own mail server connected the message leaves from the
+        // tenant's address; the job keeps replies routed to this inbox.
+        $from = $mailers->senderAddress($tenantId)
+            ?? $tenant->slug.'@'.config('services.mailgun.inbound_domain', 'myteknoland.in');
 
         $message = DB::transaction(function () use ($data, $tenantId, $from) {
             $isReply = filled($data['thread_reference'] ?? null);

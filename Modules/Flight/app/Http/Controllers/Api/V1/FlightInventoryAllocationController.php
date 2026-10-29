@@ -6,6 +6,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Modules\Core\Http\Controllers\Controller;
+use Modules\Flight\Services\Catalog\FlightCatalogTenant;
 use Modules\Flight\Enums\AllocationStatus;
 use Modules\Flight\Enums\HolderType;
 use Modules\Flight\Models\FlightInventory;
@@ -94,7 +95,7 @@ class FlightInventoryAllocationController extends Controller
     {
         $data = $request->validate([
             'flight_inventory_id'   => 'required|integer|exists:flight_inventories,id',
-            'cabin_class'           => ['required', Rule::exists('flight_cabin_classes', 'code')->where('is_active', true)],
+            'cabin_class'           => ['required', FlightCatalogTenant::activeCabinClass()],
             'from_holder_type'      => 'required|in:central,tenant,distributor,agent',
             'from_holder_id'        => 'nullable|integer',
             'to_holder_type'        => 'required|in:tenant,distributor,agent,b2c',

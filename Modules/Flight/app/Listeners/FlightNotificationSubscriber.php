@@ -478,9 +478,32 @@ class FlightNotificationSubscriber
             'flight_number'     => $inv?->flight_number ?? 'Flight',
             'origin'            => $inv?->originAirport?->iata_code ?? 'DEP',
             'destination'       => $inv?->destinationAirport?->iata_code ?? 'ARR',
-            'departure'         => $inv?->departure_time ? (string) $inv->departure_time : '',
+            'departure'         => $this->departureLabel($booking),
             'amount'            => (float) $booking->total_amount,
             'currency'          => $booking->currency ?: 'INR',
         ];
+    }
+
+    /**
+     * "Tue, 27 Oct 2026 · 02:56" from the booked itinerary. Inventory only
+     * holds the recurring time of day, so it is the fallback.
+     */
+    protected function departureLabel(FlightBooking $booking): string
+    {
+        $itinerary = (array) ($booking->itinerary ?? []);
+        $date = $itinerary['departure_date'] ?? data_get($itinerary, 'departure.date');
+        $time = $itinerary['departure_time'] ?? data_get($itinerary, 'departure.time') ?? $booking->flightInventory?->departure_time;
+
+        try {
+            $when = $date ? \Illuminate\Support\Carbon::parse(trim($date . ' ' . ($time ?? ''))) : null;
+        } catch (Throwable) {
+            $when = null;
+        }
+
+        if ($when) {
+            return $time ? $when->format('D, d M Y · H:i') : $when->format('D, d M Y');
+        }
+
+        return $time ? substr((string) $time, 0, 5) : '';
     }
 }

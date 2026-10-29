@@ -59,41 +59,10 @@ class FlightBookingService
             ->orWhere('id', is_numeric($quoteIdentifier) ? (int) $quoteIdentifier : 0)
             ->first();
 
-        $requestedFareId = $input['flight_fare_id'] ?? null;
-        $validFareId = is_numeric($requestedFareId)
-            ? \Modules\Flight\Models\FlightFare::query()->whereKey((int) $requestedFareId)->value('id')
-            : null;
-        $requestedInventoryId = $input['flight_inventory_id'] ?? null;
-        $validInventoryId = is_numeric($requestedInventoryId)
-            ? \Modules\Flight\Models\FlightInventory::query()->whereKey((int) $requestedInventoryId)->value('id')
-            : null;
+        // The price always comes from a server-issued quote; the browser never
+        // supplies the amount.
         if (! $quote) {
-            // Resilient fallback for client-generated quotes or custom route schedules
-            $totalAmount = (float) ($input['total_amount'] ?? 5000.00);
-
-            $quote = FlightFareQuote::create([
-                'quote_id'            => (string) $quoteIdentifier,
-                'tenant_id'           => $tenant?->id ?? 1,
-                'user_id'             => $user?->id,
-                'supplier_code'       => 'INTERNAL',
-                'flight_inventory_id' => $validInventoryId,
-                'flight_fare_id'      => $validFareId,
-                'currency'            => $input['currency'] ?? 'INR',
-                'selected_itinerary'  => [
-                    'pnr'        => $input['pnr'] ?? null,
-                    'pnr_number' => $input['pnr'] ?? null,
-                ],
-                'fare_details'        => [
-                    'fare_family' => 'STANDARD',
-                ],
-                'pricing_breakdown'   => [
-                    'base_fare'      => $totalAmount,
-                    'customer_price' => $totalAmount,
-                ],
-                'customer_price'      => $totalAmount,
-                'expires_at'          => Carbon::now()->addHours(2),
-                'status'              => 'ACTIVE',
-            ]);
+            throw new DomainException('This fare quote was not found. Please search and select the flight again.');
         }
 
         if ($quote->flight_fare_id !== null && ! \Modules\Flight\Models\FlightFare::query()->whereKey($quote->flight_fare_id)->exists()) {
@@ -106,15 +75,8 @@ class FlightBookingService
             $quote->save();
         }
 
-        if ($quote->isExpired()) {
-            $quote->expires_at = Carbon::now()->addHours(2);
-            $quote->status = 'ACTIVE';
-            $quote->save();
-        }
-
-        if ($quote->status !== 'ACTIVE') {
-            $quote->status = 'ACTIVE';
-            $quote->save();
+        if ($quote->isExpired() || $quote->status !== 'ACTIVE') {
+            $this->renewExpiredQuote($quote);
         }
 
         // Flight vouchers are revalidated against the server-owned quote at
@@ -375,6 +337,14 @@ class FlightBookingService
             $query->forTenant($tenant->id);
         }
 
+        $this->applyListFilters($query, $filters);
+
+        return $query->paginate($perPage);
+    }
+
+    /** Status, payment and search filters shared by the bookings table and its summary cards. */
+    private function applyListFilters(Builder $query, array $filters): void
+    {
         if (! empty($filters['status'])) {
             $query->byStatus($filters['status']);
         }
@@ -396,8 +366,40 @@ class FlightBookingService
                   });
             });
         }
+    }
 
-        return $query->paginate($perPage);
+    /**
+     * Counts for the Bookings page cards: every booking matching the same
+     * filters as the table, across all pages (not just the one being viewed).
+     *
+     * @return array{total: int, payment_pending: int, pnr_pending: int, confirmed: int, cancelled_or_refunded: int}
+     */
+    public function bookingSummary(array $filters = [], ?Tenant $tenant = null): array
+    {
+        $query = FlightBooking::query();
+        if ($tenant) {
+            $query->forTenant($tenant->id);
+        }
+        $this->applyListFilters($query, $filters);
+
+        $byStatus = (clone $query)
+            ->selectRaw('booking_status, COUNT(*) as aggregate')
+            ->groupBy('booking_status')
+            ->pluck('aggregate', 'booking_status')
+            ->map(fn ($count) => (int) $count);
+        $count = fn (BookingStatus ...$statuses): int => array_sum(array_map(fn (BookingStatus $s) => $byStatus[$s->value] ?? 0, $statuses));
+
+        return [
+            'total'           => $byStatus->sum(),
+            'payment_pending' => $count(BookingStatus::PAYMENT_PENDING, BookingStatus::QUOTED),
+            'pnr_pending'     => $count(BookingStatus::PNR_PENDING),
+            'confirmed'       => $count(BookingStatus::BOOKED, BookingStatus::CONFIRMED, BookingStatus::COMPLETED),
+            // Cancelled bookings, plus any refunded booking still in another status.
+            'cancelled_or_refunded' => $count(BookingStatus::CANCELLED) + (clone $query)
+                ->where('booking_status', '!=', BookingStatus::CANCELLED->value)
+                ->where('payment_status', PaymentStatus::REFUNDED->value)
+                ->count(),
+        ];
     }
 
     /**
@@ -479,6 +481,39 @@ class FlightBookingService
 
             return $booking->fresh(['passengers', 'quote', 'hold', 'flightInventory']);
         });
+    }
+
+    /**
+     * An elapsed quote may be renewed only while its seat hold is still live
+     * and the fare still prices the same; otherwise the customer must search
+     * again. Mirrors the renewal rule used at payment time.
+     */
+    private function renewExpiredQuote(FlightFareQuote $quote): void
+    {
+        $hold = null;
+        if ($quote->hold_id || $quote->hold_reference) {
+            $hold = FlightHold::where('id', $quote->hold_id)
+                ->orWhere('hold_id', $quote->hold_reference)
+                ->first();
+        }
+
+        if (! $hold || ! $hold->isActive() || ! $quote->flight_fare_id) {
+            throw new DomainException('This fare quote has expired. Fares may have changed. Please search and select the flight again.');
+        }
+
+        $priceCheck = $this->holdService->revalidatePrice([
+            'fare_id'        => $quote->flight_fare_id,
+            'expected_price' => (float) $quote->customer_price,
+            'quantity'       => max(1, (int) $hold->quantity),
+        ], $quote->tenant);
+
+        if (empty($priceCheck['available']) || ! empty($priceCheck['price_changed'])) {
+            throw new DomainException('This fare quote has expired and the fare has changed. Please search again and confirm the new fare.');
+        }
+
+        $quote->status = 'ACTIVE';
+        $quote->expires_at = $hold->expires_at;
+        $quote->save();
     }
 
     /** Assign a route-level PNR to already-paid bookings for that exact flight date. */
@@ -578,12 +613,27 @@ class FlightBookingService
     {
         $booking = $this->getBooking($identifier, $tenant);
 
+        // A paid booking goes through servicing: it applies the tenant refund
+        // policy, records the refund and returns the money. Only flipping the
+        // status here used to show "REFUNDED" without anything being refunded.
+        if ($booking->payment_status === PaymentStatus::PAID) {
+            if (! $booking->canTransitionTo(BookingStatus::CANCELLED)) {
+                throw new DomainException("A {$booking->booking_status->value} booking cannot be cancelled.");
+            }
+            app(\Modules\Flight\Services\Servicing\FlightServicingService::class)
+                ->cancelBooking($booking, $reason, 'admin');
+
+            return $booking->fresh(['passengers', 'quote', 'hold', 'refunds']);
+        }
+
+        return $this->cancelUnpaidBooking($booking, $reason);
+    }
+
+    /** Cancel a booking nothing was paid for: no refund, just free the held seats. */
+    public function cancelUnpaidBooking(FlightBooking $booking, string $reason): FlightBooking
+    {
         // State machine check: cannot cancel from CANCELLED, FAILED, COMPLETED
         $booking->transitionTo(BookingStatus::CANCELLED, $reason);
-
-        if ($booking->payment_status === PaymentStatus::PAID) {
-            $booking->payment_status = PaymentStatus::REFUNDED;
-        }
         $booking->save();
 
         // Release linked hold if still active

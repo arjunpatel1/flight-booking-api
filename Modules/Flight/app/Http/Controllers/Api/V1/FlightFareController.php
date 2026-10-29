@@ -6,6 +6,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Modules\Core\Http\Controllers\Controller;
+use Modules\Flight\Services\Catalog\FlightCatalogTenant;
 use Modules\Flight\Models\FlightFare;
 use Modules\Flight\Models\FlightFareRule;
 use Modules\Flight\Models\FlightInventory;
@@ -179,7 +180,7 @@ class FlightFareController extends Controller
             'fare_family_id' => ['nullable', 'exists:flight_fare_families,id'],
             'fare_family_code' => ['required', 'string', 'max:50'],
             'fare_basis_code' => ['nullable', 'string', 'max:50'],
-            'cabin_class' => ['required', 'string', Rule::exists('flight_cabin_classes', 'code')->where('is_active', true)],
+            'cabin_class' => ['required', 'string', FlightCatalogTenant::activeCabinClass()],
             'currency' => ['nullable', 'string', 'max:3'],
             'supplier_code' => ['nullable', 'string', 'max:50'],
 
@@ -313,7 +314,7 @@ class FlightFareController extends Controller
             'fare_family_id' => ['nullable', 'exists:flight_fare_families,id'],
             'fare_family_code' => ['sometimes', 'string', 'max:50'],
             'fare_basis_code' => ['nullable', 'string', 'max:50'],
-            'cabin_class' => ['sometimes', 'string', Rule::exists('flight_cabin_classes', 'code')->where('is_active', true)],
+            'cabin_class' => ['sometimes', 'string', FlightCatalogTenant::activeCabinClass()],
             'currency' => ['nullable', 'string', 'max:3'],
             'supplier_code' => ['nullable', 'string', 'max:50'],
 
@@ -444,7 +445,7 @@ class FlightFareController extends Controller
     {
         $validated = $request->validate([
             'flight_inventory_id' => ['sometimes', 'exists:flight_inventories,id'],
-            'cabin_class' => ['sometimes', 'string', Rule::exists('flight_cabin_classes', 'code')->where('is_active', true)],
+            'cabin_class' => ['sometimes', 'string', FlightCatalogTenant::activeCabinClass()],
             'fare_family_code' => ['sometimes', 'string'],
             'seats_needed' => ['sometimes', 'integer', 'min:1'],
         ]);

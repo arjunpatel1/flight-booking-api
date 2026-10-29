@@ -6,6 +6,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Modules\Core\Http\Controllers\Controller;
+use Modules\Flight\Services\Catalog\FlightCatalogTenant;
 use Modules\Flight\Services\Booking\FlightBookingService;
 use Modules\Flight\Models\FlightRoute;
 use Modules\Support\ApiResponse;
@@ -42,10 +43,10 @@ class FlightRouteController extends Controller
 
         $validated = $request->validate([
             'tenant_id' => ['nullable', 'integer'],
-            'origin_airport_id' => ['required', 'exists:flight_airports,id'],
+            'origin_airport_id' => ['required', FlightCatalogTenant::exists('flight_airports')],
             'destination_airport_id' => [
                 'required',
-                'exists:flight_airports,id',
+                FlightCatalogTenant::exists('flight_airports'),
                 'different:origin_airport_id',
             ],
             'distance_km' => ['nullable', 'integer', 'min:0'],
@@ -78,8 +79,8 @@ class FlightRouteController extends Controller
         $route = FlightRoute::findOrFail($id);
 
         $validated = $request->validate([
-            'origin_airport_id' => ['sometimes', 'exists:flight_airports,id'],
-            'destination_airport_id' => ['sometimes', 'exists:flight_airports,id', 'different:origin_airport_id'],
+            'origin_airport_id' => ['sometimes', FlightCatalogTenant::exists('flight_airports')],
+            'destination_airport_id' => ['sometimes', FlightCatalogTenant::exists('flight_airports'), 'different:origin_airport_id'],
             'distance_km' => ['nullable', 'integer', 'min:0'],
             'flight_duration_minutes' => ['nullable', 'integer', 'min:0'],
             'is_active' => ['nullable', 'boolean'],

@@ -28,7 +28,7 @@ class FlightMetaController extends Controller
                 'ancillaries' => true,
                 'seat_maps' => true,
             ],
-            'cabin_classes' => FlightCabinClass::query()->where('is_active', true)
+            'cabin_classes' => FlightCabinClass::ownedByCatalog()->where('is_active', true)
                 ->orderBy('sort_order')->get(['code as value', 'name as label']),
             'trip_types' => [
                 ['value' => 'one_way', 'label' => 'One Way'],
@@ -41,8 +41,8 @@ class FlightMetaController extends Controller
                 ['value' => 'infant', 'label' => 'Infant (Under 2 yrs)'],
             ],
             'stats' => [
-                'total_airports' => FlightAirport::count(),
-                'total_airlines' => FlightAirline::count(),
+                'total_airports' => FlightAirport::ownedByCatalog()->count(),
+                'total_airlines' => FlightAirline::ownedByCatalog()->count(),
             ],
         ]);
     }

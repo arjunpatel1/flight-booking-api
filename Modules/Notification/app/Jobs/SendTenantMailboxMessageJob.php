@@ -7,6 +7,8 @@ use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Mail;
 use Modules\Notification\Models\TenantMailMessage;
 use Modules\Notification\Services\Channels\EmailChannel;
+use Modules\Notification\Services\TenantMailerService;
+use Modules\Saas\Models\Tenant;
 
 class SendTenantMailboxMessageJob implements ShouldQueue
 {
@@ -20,7 +22,7 @@ class SendTenantMailboxMessageJob implements ShouldQueue
         $this->onQueue('mail');
     }
 
-    public function handle(EmailChannel $renderer): void
+    public function handle(EmailChannel $renderer, TenantMailerService $mailers): void
     {
         $message = TenantMailMessage::query()->withoutGlobalTenant()
             ->where('tenant_id', $this->tenantId)->findOrFail($this->messageId);
@@ -35,12 +37,23 @@ class SendTenantMailboxMessageJob implements ShouldQueue
             (string) (config('saas.company_mail.logo_url') ?: rtrim((string) config('app.url'), '/').'/logo.svg'),
             (string) config('saas.company_mail.primary_color', '#F57C00'),
         );
-        $sent = Mail::mailer('mailgun')->html(
+        // The tenant's own server when connected, otherwise the platform's Mailgun.
+        // Replies are pointed back at the Mailgun inbox so they still thread here.
+        $own = $mailers->resolve($this->tenantId);
+        $inboxAddress = $own
+            ? Tenant::query()->withoutGlobalScopes()->whereKey($this->tenantId)->value('slug')
+                .'@'.config('services.mailgun.inbound_domain', 'myteknoland.in')
+            : null;
+
+        $sent = ($own['mailer'] ?? Mail::mailer('mailgun'))->html(
             $bodyHtml,
-            function ($mail) use ($message, $thread, $attachments) {
-                $mail->from($message->from_address, config('mail.from.name'))
+            function ($mail) use ($message, $thread, $attachments, $own, $inboxAddress) {
+                $mail->from($message->from_address, ($own['from_name'] ?? '') ?: config('mail.from.name'))
                     ->to($message->to_address)
                     ->subject($thread->subject);
+                if ($inboxAddress) {
+                    $mail->replyTo($inboxAddress);
+                }
                 foreach ($attachments as $attachment) {
                     $mail->attachFromStorageDisk(
                         $attachment->disk,
@@ -55,7 +68,8 @@ class SendTenantMailboxMessageJob implements ShouldQueue
         $message->update([
             'status' => 'sent',
             'sent_at' => now(),
-            'provider_message_id' => $sent ? trim((string) $sent->getMessageId(), '<> ') : null,
+            // Only Mailgun ids can be checked by the delivery-status sync.
+            'provider_message_id' => $sent && ! $own ? trim((string) $sent->getMessageId(), '<> ') : null,
         ]);
     }
 

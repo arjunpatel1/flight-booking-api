@@ -468,6 +468,7 @@ class FlightInventoryAllocationEngine
         ?int $holderId,
     ): FlightInventoryBalance {
         $tenantId = $holderType === HolderType::CENTRAL ? null : ($holderType === HolderType::TENANT ? $holderId : $inventory->tenant_id);
+        $initialSeats = $this->initialCentralSeats($inventory, $cabin, $holderType);
 
         FlightInventoryBalance::withoutGlobalTenant()->firstOrCreate(
             [
@@ -478,8 +479,8 @@ class FlightInventoryAllocationEngine
             ],
             [
                 'tenant_id'       => $tenantId,
-                'total_allocated' => 0,
-                'available'       => 0,
+                'total_allocated' => $initialSeats,
+                'available'       => $initialSeats,
                 'reserved'        => 0,
                 'booked'          => 0,
                 'frozen'          => 0,
@@ -494,6 +495,20 @@ class FlightInventoryAllocationEngine
             ->where('cabin_class', $cabin)
             ->lockForUpdate()
             ->firstOrFail();
+    }
+
+    /**
+     * A flight's central pool starts with the seats it has on sale in its own
+     * cabin. Nothing else ever filled it, so the first allocation from a new
+     * flight always failed with "Central Pool has 0 available".
+     */
+    private function initialCentralSeats(FlightInventory $inventory, string $cabin, HolderType $holderType): int
+    {
+        if ($holderType !== HolderType::CENTRAL || strcasecmp((string) $inventory->cabin_class, $cabin) !== 0) {
+            return 0;
+        }
+
+        return max(0, (int) $inventory->available_seats);
     }
 
     private function findOrCreateBalance(

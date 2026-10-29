@@ -88,6 +88,10 @@ class FlightBooking extends Model
         'rescheduled_at'    => 'datetime',
     ];
 
+    protected $hidden = [
+        'access_token_hash',
+    ];
+
     protected static function booted(): void
     {
         static::creating(function (self $model) {
@@ -95,6 +99,29 @@ class FlightBooking extends Model
                 $model->booking_reference = 'BKNG-' . strtoupper(Str::random(10));
             }
         });
+    }
+
+    // ── Guest access ─────────────────────────────────────────────────────────
+
+    /**
+     * Issue the secret a guest needs to keep working on this booking (payment,
+     * e-ticket). Only its hash is stored; the plain token is returned once.
+     * The booking reference alone is printed on tickets and shared, so it is
+     * never enough to read passenger data.
+     */
+    public function issueAccessToken(): string
+    {
+        $token = Str::random(48);
+        $this->forceFill(['access_token_hash' => hash('sha256', $token)])->save();
+
+        return $token;
+    }
+
+    public function acceptsAccessToken(?string $token): bool
+    {
+        return filled($token)
+            && filled($this->access_token_hash)
+            && hash_equals($this->access_token_hash, hash('sha256', $token));
     }
 
     // ── Relationships ─────────────────────────────────────────────────────────

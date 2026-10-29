@@ -34,7 +34,10 @@ return new class extends Migration
             'flight_inventory_transactions', 'flight_inventory_reservations',
         ] as $table) {
             if (Schema::hasTable($table) && Schema::hasColumn($table, 'cabin_class')) {
-                DB::statement("ALTER TABLE `{$table}` MODIFY `cabin_class` VARCHAR(30) NOT NULL DEFAULT 'ECONOMY'");
+                $this->isMysql()
+                    ? DB::statement("ALTER TABLE `{$table}` MODIFY `cabin_class` VARCHAR(30) NOT NULL DEFAULT 'ECONOMY'")
+                    // MODIFY is MySQL-only; SQLite (the test database) rebuilds the column.
+                    : Schema::table($table, fn (Blueprint $blueprint) => $blueprint->string('cabin_class', 30)->default('ECONOMY')->change());
             }
         }
     }
@@ -53,9 +56,16 @@ return new class extends Migration
                 if (DB::table($table)->whereNotIn('cabin_class', ['ECONOMY', 'PREMIUM_ECONOMY', 'BUSINESS', 'FIRST'])->exists()) {
                     throw new \RuntimeException("Cannot roll back cabin class configuration while {$table} contains custom cabin codes.");
                 }
-                DB::statement("ALTER TABLE `{$table}` MODIFY `cabin_class` ENUM('ECONOMY','PREMIUM_ECONOMY','BUSINESS','FIRST') NOT NULL DEFAULT 'ECONOMY'");
+                $this->isMysql()
+                    ? DB::statement("ALTER TABLE `{$table}` MODIFY `cabin_class` ENUM('ECONOMY','PREMIUM_ECONOMY','BUSINESS','FIRST') NOT NULL DEFAULT 'ECONOMY'")
+                    : Schema::table($table, fn (Blueprint $blueprint) => $blueprint->enum('cabin_class', ['ECONOMY', 'PREMIUM_ECONOMY', 'BUSINESS', 'FIRST'])->default('ECONOMY')->change());
             }
         }
         Schema::dropIfExists('flight_cabin_classes');
+    }
+
+    private function isMysql(): bool
+    {
+        return in_array(DB::getDriverName(), ['mysql', 'mariadb'], true);
     }
 };

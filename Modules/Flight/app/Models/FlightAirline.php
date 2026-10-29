@@ -4,6 +4,7 @@ namespace Modules\Flight\Models;
 
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Modules\Flight\Models\Concerns\BelongsToTenantCatalog;
 use Modules\Support\Eloquent\Model;
 use Modules\Support\Traits\HasActiveStatus;
 use Modules\Support\Traits\HasFilters;
@@ -11,11 +12,12 @@ use Modules\Support\Traits\HasSortBy;
 
 class FlightAirline extends Model
 {
-    use HasActiveStatus, HasFilters, HasSortBy;
+    use BelongsToTenantCatalog, HasActiveStatus, HasFilters, HasSortBy;
 
     protected $table = 'flight_airlines';
 
     protected $fillable = [
+        'tenant_id',
         'iata_code',
         'icao_code',
         'name',
