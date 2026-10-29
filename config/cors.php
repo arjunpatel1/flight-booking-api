@@ -33,7 +33,9 @@ return [
 
     'exposed_headers' => [],
 
-    'max_age' => 0,
+    // Let browsers reuse a preflight answer instead of sending an extra
+    // OPTIONS request (and a full PHP boot) before every API call.
+    'max_age' => (int) env('CORS_MAX_AGE', 7200),
 
     'supports_credentials' => true,
 

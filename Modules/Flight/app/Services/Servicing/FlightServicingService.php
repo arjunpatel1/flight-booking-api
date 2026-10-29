@@ -23,14 +23,18 @@ use Modules\Flight\Models\FlightInventory;
 use Modules\Flight\Models\FlightPayment;
 use Modules\Flight\Models\FlightRefund;
 use Modules\Flight\Models\FlightTicket;
+use Modules\Flight\Services\Payment\FlightPaymentGatewayAdapter;
 use Modules\Flight\Services\Supplier\SupplierManager;
 use Modules\Flight\Services\Wallet\FlightWalletLedgerService;
+use Modules\Saas\Models\Tenant;
 
 class FlightServicingService
 {
     public function __construct(
         protected SupplierManager $supplierManager,
         protected FlightWalletLedgerService $walletLedgerService,
+        protected FlightRefundPolicyService $refundPolicy,
+        protected FlightPaymentGatewayAdapter $gatewayAdapter,
     ) {}
 
     // =========================================================================
@@ -47,48 +51,17 @@ class FlightServicingService
         }
 
         $fare = $booking->flightFare;
-        $originalAmount = (float) $booking->total_amount;
-        $currency = $booking->currency ?: 'INR';
+        $fareRefundable = $fare === null || (bool) $fare->is_refundable;
 
-        // Check refundability
-        $isRefundable = true;
-        if ($fare !== null && ! $fare->is_refundable) {
-            $isRefundable = false;
-        }
+        // An airline charge in the fare rules (per passenger) overrides the
+        // tenant's time-based slabs; everything else follows the tenant policy.
+        $fareRuleFee = $fare?->fareRule?->rule_details['cancellation_fee'] ?? null;
+        $fareRuleFee = is_numeric($fareRuleFee) && (float) $fareRuleFee > 0 ? (float) $fareRuleFee : null;
 
-        if (! $isRefundable) {
-            return [
-                'booking_reference' => $booking->booking_reference,
-                'is_refundable'     => false,
-                'original_amount'   => $originalAmount,
-                'cancellation_fee'  => $originalAmount,
-                'refundable_amount' => 0.00,
-                'currency'          => $currency,
-                'policy_text'       => 'Non-refundable fare per airline fare rules.',
-            ];
-        }
+        $tenant = $booking->tenant_id ? Tenant::query()->withoutGlobalScopes()->find($booking->tenant_id) : null;
+        $policy = $this->refundPolicy->policyFor($tenant);
 
-        // Determine cancellation fee from fare rules or standard default
-        $cancellationFee = 1000.00;
-        if ($fare && $fare->fareRule && ! empty($fare->fareRule->rule_details['cancellation_fee'])) {
-            $cancellationFee = (float) $fare->fareRule->rule_details['cancellation_fee'];
-        } elseif ($originalAmount > 0) {
-            // Standard minimum fee or 20% of fare, whichever is smaller
-            $cancellationFee = min($originalAmount, max(500.00, round($originalAmount * 0.20, 2)));
-        }
-
-        $cancellationFee = min($originalAmount, $cancellationFee);
-        $refundableAmount = round(max(0.00, $originalAmount - $cancellationFee), 2);
-
-        return [
-            'booking_reference' => $booking->booking_reference,
-            'is_refundable'     => true,
-            'original_amount'   => $originalAmount,
-            'cancellation_fee'  => $cancellationFee,
-            'refundable_amount' => $refundableAmount,
-            'currency'          => $currency,
-            'policy_text'       => 'Refundable subject to standard cancellation penalty.',
-        ];
+        return $this->refundPolicy->quote($booking, $policy, $fareRefundable, $fareRuleFee);
     }
 
     // =========================================================================
@@ -104,13 +77,13 @@ class FlightServicingService
         string $reason = 'Customer cancellation',
         string $actor = 'agent'
     ): array {
-        return DB::transaction(function () use ($booking, $reason, $actor) {
+        $result = DB::transaction(function () use ($booking, $reason, $actor) {
             // 1. Lock booking
             $booking = FlightBooking::where('id', $booking->id)->lockForUpdate()->firstOrFail();
 
             // 1a. IDEMPOTENCY GUARD: If already cancelled, return existing refund record safely
             if ($booking->booking_status === BookingStatus::CANCELLED) {
-                $existingRefund = $booking->refunds()->where('status', RefundStatus::PROCESSED)->latest()->first();
+                $existingRefund = $booking->refunds()->latest('id')->first();
 
                 return [
                     'success'           => true,
@@ -120,7 +93,7 @@ class FlightServicingService
                     'refund_amount'     => (float) $booking->refunded_amount,
                     'refund_reference'  => $existingRefund?->refund_reference,
                     'refund_method'     => $existingRefund?->refund_method?->value ?? 'NONE',
-                    'refund_status'     => $existingRefund?->status?->value ?? 'PROCESSED',
+                    'refund_status'     => $existingRefund?->status?->value ?? 'NONE',
                     'wallet_credited'   => $existingRefund?->refund_method === RefundMethod::WALLET,
                     'wallet_balance'    => null,
                     'cancelled_at'      => $booking->cancelled_at?->toIso8601String() ?? now()->toIso8601String(),
@@ -172,10 +145,8 @@ class FlightServicingService
             $booking->cancellation_fee    = $cancellationFee;
             $booking->refunded_amount     = $refundableAmount;
             $booking->ticket_status       = TicketStatus::CANCELLED;
-
-            if ($refundableAmount > 0) {
-                $booking->payment_status = PaymentStatus::REFUNDED;
-            }
+            // payment_status becomes REFUNDED only once money is actually
+            // returned (markRefundSettled), not when a refund is merely requested.
             $booking->save();
 
             // 7. Process Refund & Ledger Entry (Strict Idempotency Guard)
@@ -186,7 +157,7 @@ class FlightServicingService
                 // Check if a refund has already been recorded for this cancellation
                 $existingRefund = FlightRefund::where('flight_booking_id', $booking->id)
                     ->where('refund_type', 'CANCELLATION')
-                    ->where('status', RefundStatus::PROCESSED)
+                    ->whereIn('status', [RefundStatus::PROCESSED, RefundStatus::PENDING])
                     ->first();
 
                 if ($existingRefund) {
@@ -226,17 +197,13 @@ class FlightServicingService
 
                         $walletTxnId = $refundTxn->id;
                     } else {
-                        // Gateway refund (Razorpay / Mock)
+                        // Gateway refund: recorded as PENDING here and sent to
+                        // Razorpay only after this transaction commits (see
+                        // processGatewayRefund), so a rollback can never leave
+                        // money refunded for a booking that is not cancelled.
                         $refundMethod = RefundMethod::GATEWAY;
-                        $gatewayRefundId = 'RF-GTW-' . strtoupper(Str::random(10));
-
-                        if ($payment) {
-                            $payment->update([
-                                'refunded_amount' => $refundableAmount,
-                                'status'          => FlightPaymentStatus::REFUNDED,
-                            ]);
-                        }
                     }
+                    $isWalletRefund = $refundMethod === RefundMethod::WALLET;
 
                     // Create FlightRefund Record
                     $refund = FlightRefund::create([
@@ -251,26 +218,24 @@ class FlightServicingService
                         'cancellation_penalty'      => $cancellationFee,
                         'refund_amount'             => $refundableAmount,
                         'currency'                  => $booking->currency ?: 'INR',
-                        'status'                    => RefundStatus::PROCESSED,
+                        'status'                    => $isWalletRefund ? RefundStatus::PROCESSED : RefundStatus::PENDING,
                         'gateway_refund_id'         => $gatewayRefundId,
                         'wallet_transaction_id'     => $walletTxnId,
                         'reason'                    => $reason,
-                        'processed_at'              => now(),
+                        'processed_at'              => $isWalletRefund ? now() : null,
                         'audit_meta'                => [
                             'actor'             => $actor,
                             'supplier_code'     => $booking->supplier_code ?: 'MOCK_SUPPLIER',
                             'pax_count'         => $paxCount,
                             'booking_reference' => $booking->booking_reference,
+                            'applied_rule'      => $quote['applied_rule'] ?? null,
+                            'breakdown'         => $quote['breakdown'] ?? null,
                         ],
                     ]);
 
-                    // Ticket Lifecycle Step 3: Once refund is finalized, transition to REFUNDED
-                    $booking->tickets()->update([
-                        'status' => TicketStatus::REFUNDED,
-                    ]);
-                    $booking->update([
-                        'ticket_status' => TicketStatus::REFUNDED,
-                    ]);
+                    if ($isWalletRefund) {
+                        $this->markRefundSettled($booking, $refund);
+                    }
                 }
             }
 
@@ -295,11 +260,11 @@ class FlightServicingService
                 ],
             ]);
 
-            // 9. Dispatch Event
+            // 9. Dispatch Event (FlightRefundCompleted fires in markRefundSettled,
+            //    once the money has actually been returned)
             if ($refund) {
                 event(new FlightBookingCancelled($booking, $refund));
                 event(new \Modules\Flight\Events\FlightRefundInitiated($refund, $booking));
-                event(new \Modules\Flight\Events\FlightRefundCompleted($refund, $booking));
             }
 
             return [
@@ -309,13 +274,181 @@ class FlightServicingService
                 'cancellation_fee'  => $cancellationFee,
                 'refund_amount'     => $refundableAmount,
                 'refund_reference'  => $refund?->refund_reference,
+                'refund_id'         => $refund?->id,
                 'refund_method'     => $refund?->refund_method?->value ?? 'NONE',
-                'refund_status'     => $refund?->status?->value ?? 'PROCESSED',
+                'refund_status'     => $refund?->status?->value ?? 'NONE',
                 'wallet_credited'   => $refundTxn !== null,
                 'wallet_balance'    => $refundTxn?->closing_balance,
                 'cancelled_at'      => $booking->cancelled_at->toIso8601String(),
+                'applied_rule'      => $quote['applied_rule'] ?? null,
+                'breakdown'         => $quote['breakdown'] ?? [],
             ];
         });
+
+        // 10. Send a pending gateway refund to Razorpay now that the
+        //     cancellation is committed.
+        if (($result['refund_status'] ?? null) === RefundStatus::PENDING->value && ! empty($result['refund_id'])) {
+            $refund = $this->processGatewayRefund(FlightRefund::findOrFail($result['refund_id']));
+            $result['refund_status'] = $refund->status->value;
+            $result['refund_message'] = $refund->failure_reason;
+        }
+        unset($result['refund_id']);
+
+        return $result;
+    }
+
+    /**
+     * Send a PENDING (or FAILED, on retry) gateway refund to Razorpay, or, if
+     * Razorpay already accepted it, check whether it has settled yet.
+     * Safe to call repeatedly: an accepted refund is never sent again, and
+     * Razorpay rejects a duplicate receipt.
+     */
+    public function processGatewayRefund(FlightRefund $refund): FlightRefund
+    {
+        return DB::transaction(function () use ($refund) {
+            $refund = FlightRefund::whereKey($refund->id)->lockForUpdate()->firstOrFail();
+            if ($refund->refund_method !== RefundMethod::GATEWAY
+                || ! in_array($refund->status, [RefundStatus::PENDING, RefundStatus::FAILED], true)) {
+                return $refund;
+            }
+
+            $booking = FlightBooking::findOrFail($refund->flight_booking_id);
+            $payment = $refund->flight_payment_id ? FlightPayment::find($refund->flight_payment_id) : null;
+            if (! $payment) {
+                $refund->update(['status' => RefundStatus::FAILED, 'failure_reason' => 'No completed payment is linked to this booking, so it cannot be refunded online.']);
+
+                return $refund;
+            }
+
+            // Already accepted by Razorpay: only refresh its status.
+            $alreadyAccepted = $refund->status === RefundStatus::PENDING && filled($refund->gateway_refund_id);
+            $result = $alreadyAccepted
+                ? $this->gatewayAdapter->fetchRefund($payment, (string) $refund->gateway_refund_id)
+                : $this->gatewayAdapter->refund($payment, (float) $refund->refund_amount, $refund->refund_reference);
+
+            $this->applyGatewayRefundResult($booking, $refund, $payment, $result, $alreadyAccepted ? 'status_check' : 'refund_request');
+
+            return $refund->refresh();
+        });
+    }
+
+    /**
+     * Apply a Razorpay refund webhook (refund.processed / refund.failed /
+     * refund.created). The refund is matched by its Razorpay id, or by the
+     * reference we sent as the receipt when it was created.
+     */
+    public function applyGatewayRefundEvent(string $event, array $entity): array
+    {
+        $gatewayRefundId = (string) ($entity['id'] ?? '');
+        $ourReference = (string) (data_get($entity, 'notes.refund_reference') ?: ($entity['receipt'] ?? ''));
+
+        return DB::transaction(function () use ($event, $entity, $gatewayRefundId, $ourReference) {
+            $refund = FlightRefund::query()
+                ->where(function ($match) use ($gatewayRefundId, $ourReference) {
+                    $match->where('gateway_refund_id', $gatewayRefundId !== '' ? $gatewayRefundId : '__none__');
+                    if ($ourReference !== '') {
+                        $match->orWhere('refund_reference', $ourReference);
+                    }
+                })
+                ->lockForUpdate()
+                ->first();
+            if (! $refund) {
+                return ['status' => 'not_found', 'message' => 'No matching flight refund for webhook.'];
+            }
+            if ($refund->status === RefundStatus::PROCESSED) {
+                return ['status' => 'already_processed', 'reference' => $refund->refund_reference];
+            }
+
+            $payment = $refund->flight_payment_id ? FlightPayment::find($refund->flight_payment_id) : null;
+            // The webhook must be about this payment and this amount.
+            if ($payment && isset($entity['payment_id']) && (string) $entity['payment_id'] !== (string) $payment->gateway_transaction_id) {
+                throw new DomainException('Refund webhook payment does not match the flight refund.');
+            }
+            if (isset($entity['amount']) && (int) $entity['amount'] !== (int) round((float) $refund->refund_amount * 100)) {
+                throw new DomainException('Refund webhook amount does not match the flight refund.');
+            }
+
+            $result = $this->gatewayAdapter->mapRefundEntity($event === 'refund.failed' ? array_merge($entity, ['status' => 'failed']) : $entity);
+            if ($event === 'refund.processed') {
+                $result['status'] = 'processed';
+            }
+            $booking = FlightBooking::findOrFail($refund->flight_booking_id);
+            $this->applyGatewayRefundResult($booking, $refund, $payment, $result, 'webhook:' . $event);
+
+            return ['status' => strtolower($refund->refresh()->status->value), 'reference' => $refund->refund_reference];
+        });
+    }
+
+    /** Record one Razorpay outcome on a refund (request, status check or webhook). */
+    protected function applyGatewayRefundResult(FlightBooking $booking, FlightRefund $refund, ?FlightPayment $payment, array $result, string $source): void
+    {
+        $meta = (array) ($refund->audit_meta ?? []);
+        $meta['gateway_attempts'][] = ['at' => now()->toIso8601String(), 'source' => $source, 'status' => $result['status'], 'message' => $result['message']];
+        $refund->audit_meta = $meta;
+
+        match ($result['status']) {
+            // processed: money returned. pending: accepted by Razorpay, still
+            // settling, so it stays PENDING until confirmed.
+            'processed', 'pending' => $refund->fill([
+                'status' => RefundStatus::PENDING,
+                'gateway_refund_id' => $result['gateway_refund_id'] ?: $refund->gateway_refund_id,
+                'failure_reason' => $result['status'] === 'pending' ? 'Accepted by Razorpay; waiting for the bank to settle it.' : null,
+            ]),
+            // Online refunds switched off: stays PENDING for manual processing.
+            'disabled' => $refund->fill(['failure_reason' => $result['message']]),
+            default => $refund->fill(['status' => RefundStatus::FAILED, 'failure_reason' => $result['message']]),
+        };
+        $refund->save();
+
+        if ($result['status'] === 'processed') {
+            $this->markRefundSettled($booking, $refund, $payment);
+        }
+    }
+
+    /**
+     * Record a refund made outside the system (e.g. from the Razorpay
+     * dashboard while online refunds are switched off).
+     */
+    public function markRefundProcessedManually(FlightRefund $refund, string $externalReference, string $actor): FlightRefund
+    {
+        return DB::transaction(function () use ($refund, $externalReference, $actor) {
+            $refund = FlightRefund::whereKey($refund->id)->lockForUpdate()->firstOrFail();
+            if ($refund->status === RefundStatus::PROCESSED) {
+                return $refund;
+            }
+            if (! in_array($refund->status, [RefundStatus::PENDING, RefundStatus::FAILED], true)) {
+                throw new DomainException('Only a pending or failed refund can be marked as processed.');
+            }
+
+            $meta = (array) ($refund->audit_meta ?? []);
+            $meta['manual_settlement'] = ['by' => $actor, 'at' => now()->toIso8601String(), 'reference' => $externalReference];
+            $refund->fill(['gateway_refund_id' => $externalReference, 'failure_reason' => null, 'audit_meta' => $meta])->save();
+
+            $booking = FlightBooking::findOrFail($refund->flight_booking_id);
+            $payment = $refund->flight_payment_id ? FlightPayment::find($refund->flight_payment_id) : null;
+            $this->markRefundSettled($booking, $refund, $payment);
+
+            return $refund->refresh();
+        });
+    }
+
+    /** Money is on its way back: mark refund, payment, booking and tickets refunded. */
+    protected function markRefundSettled(FlightBooking $booking, FlightRefund $refund, ?FlightPayment $payment = null): void
+    {
+        $refund->fill(['status' => RefundStatus::PROCESSED, 'processed_at' => $refund->processed_at ?? now()])->save();
+
+        $payment?->update([
+            'refunded_amount' => (float) $refund->refund_amount,
+            'status'          => FlightPaymentStatus::REFUNDED,
+        ]);
+
+        $booking->tickets()->update(['status' => TicketStatus::REFUNDED]);
+        $booking->forceFill([
+            'payment_status' => PaymentStatus::REFUNDED,
+            'ticket_status'  => TicketStatus::REFUNDED,
+        ])->save();
+
+        event(new \Modules\Flight\Events\FlightRefundCompleted($refund, $booking));
     }
 
     // =========================================================================

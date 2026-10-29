@@ -6,6 +6,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Modules\Core\Http\Controllers\Controller;
+use Modules\Flight\Services\Servicing\FlightRefundPolicyService;
 use Modules\Saas\Models\Tenant;
 use Modules\Support\ApiResponse;
 
@@ -50,6 +51,33 @@ class FlightBookingSettingsController extends Controller
         return ApiResponse::updated([
             'minimum_advance_booking_days' => $flightSettings['minimum_advance_booking_days'],
         ], 'Flight booking settings saved.');
+    }
+
+    /** Tenant cancellation & refund policy (defaults until the tenant saves its own). */
+    public function showRefundPolicy(Request $request, FlightRefundPolicyService $policies): JsonResponse
+    {
+        $tenant = $this->tenantFor($request);
+
+        return ApiResponse::success([
+            'policy' => $policies->policyFor($tenant),
+            'defaults' => $policies->normalize(FlightRefundPolicyService::DEFAULT_POLICY),
+            'is_customised' => data_get($tenant->settings, 'flight_booking.refund_policy') !== null,
+        ]);
+    }
+
+    public function updateRefundPolicy(Request $request, FlightRefundPolicyService $policies): JsonResponse
+    {
+        $data = $request->validate(FlightRefundPolicyService::rules());
+        $policy = $policies->normalize($data);
+
+        $tenant = $this->tenantFor($request);
+        $settings = (array) ($tenant->settings ?? []);
+        $flightSettings = (array) ($settings['flight_booking'] ?? []);
+        $flightSettings['refund_policy'] = $policy;
+        $settings['flight_booking'] = $flightSettings;
+        $tenant->forceFill(['settings' => $settings])->save();
+
+        return ApiResponse::updated(['policy' => $policy, 'is_customised' => true], 'Refund policy saved.');
     }
 
     public function showTicketAdvisory(Request $request): JsonResponse

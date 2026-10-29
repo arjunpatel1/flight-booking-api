@@ -7,6 +7,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Modules\Core\Http\Controllers\Controller;
+use Modules\Flight\Services\Catalog\FlightCatalogTenant;
 use Modules\Flight\Enums\HoldStatus;
 use Modules\Flight\Models\FlightHold;
 use Modules\Flight\Services\Hold\FlightHoldService;
@@ -48,7 +49,7 @@ class FlightHoldController extends Controller
             'expected_price' => 'nullable|numeric|min:0',
             'quantity'       => 'nullable|integer|min:1|max:9',
             'departure_date' => 'nullable|date_format:Y-m-d',
-            'cabin_class'    => ['nullable', 'string', Rule::exists('flight_cabin_classes', 'code')->where('is_active', true)],
+            'cabin_class'    => ['nullable', 'string', FlightCatalogTenant::activeCabinClass()],
         ]);
 
         try {
@@ -78,7 +79,7 @@ class FlightHoldController extends Controller
         $validated = $request->validate([
             'inventory_id'        => 'required_without:flight_inventory_id|integer',
             'flight_inventory_id' => 'nullable|integer',
-            'cabin_class'         => ['nullable', 'string', Rule::exists('flight_cabin_classes', 'code')->where('is_active', true)],
+            'cabin_class'         => ['nullable', 'string', FlightCatalogTenant::activeCabinClass()],
             'quantity'            => 'nullable|integer|min:1|max:9',
             'departure_date'      => 'nullable|date_format:Y-m-d',
             'holder_type'         => 'nullable|string|in:central,tenant,distributor,agent,b2c',
@@ -114,7 +115,7 @@ class FlightHoldController extends Controller
             'flight_inventory_id' => 'nullable|integer',
             'fare_id'             => 'nullable|integer',
             'flight_fare_id'      => 'nullable|integer',
-            'cabin_class'         => ['nullable', 'string', Rule::exists('flight_cabin_classes', 'code')->where('is_active', true)],
+            'cabin_class'         => ['nullable', 'string', FlightCatalogTenant::activeCabinClass()],
             'quantity'            => 'nullable|integer|min:1|max:9',
             'departure_date'      => 'nullable|date_format:Y-m-d',
             'supplier_code'       => 'nullable|string',

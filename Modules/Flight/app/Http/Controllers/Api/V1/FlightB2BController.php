@@ -23,6 +23,7 @@ use Modules\Flight\Services\Servicing\FlightServicingService;
 use Modules\Flight\Services\Wallet\FlightWalletLedgerService;
 use Modules\Saas\Models\Tenant;
 use Modules\Support\ApiResponse;
+use Modules\User\Enums\DefaultRole;
 use RuntimeException;
 
 class FlightB2BController extends Controller
@@ -111,7 +112,7 @@ class FlightB2BController extends Controller
         if ($user) {
             $isAuthorizedAdmin = $user->hasRole('flight_admin')
                 || $user->hasRole('admin')
-                || $user->hasRole('super-admin')
+                || $user->hasRole(DefaultRole::SuperAdmin->value)
                 || (bool) ($user->is_super_admin ?? false)
                 || (bool) ($user->is_admin ?? false)
                 || ($forcedRole === 'TENANT');

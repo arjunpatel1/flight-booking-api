@@ -79,28 +79,34 @@ class FlightNotificationTemplateManager
         $reason = $data['reason'] ?? $data['failure_reason'] ?? '';
 
         switch ($template) {
+            // Sent when the booking is created, before payment.
             case 'booking_confirmation':
+                $subject = "Booking Received: {$bookingRef} | {$flightNumber} ({$origin} → {$destination})";
+                $text = "Dear {$paxName}, thank you for booking with us. We have received your booking {$bookingRef} for flight {$flightNumber} ({$origin} to {$destination}). Please complete the payment to confirm your seats.";
+                $headline = "Booking Received";
+                $details = [
+                    'Booking Reference' => $bookingRef,
+                    'Passenger'         => $paxName,
+                    'Flight'            => $flightNumber,
+                    'Route'             => "{$origin} → {$destination}",
+                    'Departure'         => $departure ?: 'As per itinerary',
+                    'Amount Due'        => "{$currency} {$amount}",
+                ];
+                break;
+
+            // Sent once payment succeeds: this is the customer's confirmation.
+            case 'payment_success':
                 $subject = "Booking Confirmed: {$bookingRef} | {$flightNumber} ({$origin} → {$destination})";
-                $text = "Dear {$paxName}, your booking {$bookingRef} for flight {$flightNumber} ({$origin} to {$destination}) has been confirmed. PNR: {$pnr}. Total: {$currency} {$amount}.";
-                $headline = "Booking Confirmed!";
+                $text = "Dear {$paxName}, your payment of {$currency} {$amount} was successful and your booking {$bookingRef} is confirmed. Your e-ticket will be emailed to you as soon as it is issued.";
+                $headline = "Booking Confirmed";
                 $details = [
                     'Booking Reference' => $bookingRef,
                     'PNR'               => $pnr,
                     'Passenger'         => $paxName,
-                    'Route'             => "{$origin} → {$destination}",
                     'Flight'            => $flightNumber,
-                    'Total Paid'        => "{$currency} {$amount}",
-                ];
-                break;
-
-            case 'payment_success':
-                $subject = "Payment Successful for Booking {$bookingRef}";
-                $text = "Dear {$paxName}, your payment of {$currency} {$amount} for booking {$bookingRef} was successful. We are issuing your tickets.";
-                $headline = "Payment Received";
-                $details = [
-                    'Booking Reference' => $bookingRef,
+                    'Route'             => "{$origin} → {$destination}",
+                    'Departure'         => $departure ?: 'As per itinerary',
                     'Amount Paid'       => "{$currency} {$amount}",
-                    'Payment Status'    => 'SUCCESS',
                 ];
                 break;
 
@@ -129,9 +135,9 @@ class FlightNotificationTemplateManager
 
             case 'ticket_issued':
             case 'eticket_available':
-                $subject = "E-Ticket Issued: {$bookingRef} | PNR {$pnr}";
-                $text = "Dear {$paxName}, your e-ticket has been issued! PNR: {$pnr}, Ticket #: {$ticketNumber}, Download Ref: {$eticketRef}. Have a safe flight!";
-                $headline = "E-Ticket Ready for Download";
+                $subject = "Your E-Ticket: {$bookingRef} | PNR {$pnr} | {$flightNumber} ({$origin} → {$destination})";
+                $text = "Dear {$paxName}, your e-ticket has been issued. Your e-ticket is attached to this email as a PDF; please carry it (printed or on your phone) along with a valid photo ID. Have a safe flight!";
+                $headline = "Your E-Ticket is Ready";
                 $details = [
                     'PNR'                 => $pnr,
                     'Ticket Number'       => $ticketNumber,
@@ -139,6 +145,7 @@ class FlightNotificationTemplateManager
                     'Booking Reference'   => $bookingRef,
                     'Flight'              => $flightNumber,
                     'Route'               => "{$origin} → {$destination}",
+                    'Departure'           => $departure ?: 'As per itinerary',
                 ];
                 break;
 
@@ -258,10 +265,28 @@ class FlightNotificationTemplateManager
      */
     protected function renderHtmlLayout(string $subject, string $headline, string $text, array $details): string
     {
+        $brand = $this->brand();
+        $color = $brand['color'];
+        $name = e($brand['name']);
+
         $rowsHtml = '';
         foreach ($details as $label => $val) {
-            $rowsHtml .= "<tr><td style=\"padding:8px 0;color:#64748b;font-size:13px;font-weight:600;width:40%;\">{$label}</td><td style=\"padding:8px 0;color:#0f172a;font-size:14px;font-weight:700;\">{$val}</td></tr>";
+            $rowsHtml .= "<tr><td style=\"padding:9px 0;color:#64748b;font-size:13px;font-weight:600;width:42%;border-bottom:1px solid #eef2f7;\">{$label}</td><td style=\"padding:9px 0;color:#0f172a;font-size:14px;font-weight:700;border-bottom:1px solid #eef2f7;\">{$val}</td></tr>";
         }
+
+        $logo = $brand['logo_url'] !== ''
+            ? '<img src="' . e($brand['logo_url']) . '" width="52" height="52" alt="' . $name . '" style="display:block;width:52px;height:52px;border-radius:50%;object-fit:cover;background:#ffffff;">'
+            : '<div style="width:52px;height:52px;line-height:52px;text-align:center;border-radius:50%;background:' . $color . ';color:#ffffff;font-size:22px;font-weight:800;">' . e(mb_strtoupper(mb_substr($brand['name'], 0, 1))) . '</div>';
+
+        $button = $brand['bookings_url'] !== ''
+            ? '<p style="margin:0 0 24px;text-align:center;"><a href="' . e($brand['bookings_url']) . '" style="display:inline-block;padding:13px 26px;background:' . $color . ';color:#ffffff;text-decoration:none;border-radius:10px;font-weight:700;font-size:15px;">View My Booking</a></p>'
+            : '';
+
+        $support = array_filter([
+            $brand['support_phone'] !== '' ? 'Call ' . e($brand['support_phone']) : null,
+            $brand['support_email'] !== '' ? 'email <a href="mailto:' . e($brand['support_email']) . '" style="color:' . $color . ';">' . e($brand['support_email']) . '</a>' : null,
+        ]);
+        $supportLine = $support ? '<p style="margin:0 0 16px;font-size:13px;color:#475569;text-align:center;">Need help? ' . implode(' or ', $support) . '.</p>' : '';
 
         return <<<HTML
 <!DOCTYPE html>
@@ -269,35 +294,71 @@ class FlightNotificationTemplateManager
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
   <title>{$subject}</title>
 </head>
-<body style="margin:0;padding:24px 12px;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1e293b;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e2e8f0;box-shadow:0 4px 12px rgba(0,0,0,0.05);">
+<body style="margin:0;padding:24px 12px;background:#f4f6f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;color:#1e293b;">
+  <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="max-width:620px;margin:0 auto;background:#ffffff;border-radius:18px;overflow:hidden;border:1px solid #e2e8f0;box-shadow:0 10px 30px rgba(15,23,42,0.06);">
+    <tr><td style="height:5px;background:{$color};"></td></tr>
     <tr>
-      <td style="background:linear-gradient(135deg, #0284c7 0%, #0369a1 100%);padding:28px 24px;text-align:left;">
-        <span style="color:#e0f2fe;font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;">FLIGHT NOTIFICATION</span>
-        <h1 style="color:#ffffff;font-size:22px;margin:8px 0 0;font-weight:800;">{$headline}</h1>
+      <td style="padding:22px 26px;border-bottom:1px solid #eef2f7;">
+        <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+          <td>{$logo}</td>
+          <td style="padding-left:14px;">
+            <div style="font-size:19px;font-weight:800;color:#0f172a;">{$name}</div>
+            <div style="margin-top:3px;font-size:12px;color:#64748b;">Flight Booking</div>
+          </td>
+        </tr></table>
       </td>
     </tr>
     <tr>
-      <td style="padding:28px 24px;">
-        <p style="font-size:15px;line-height:1.6;color:#334155;margin:0 0 20px;">{$text}</p>
-        <table width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;border-radius:12px;padding:16px 20px;margin-bottom:24px;">
+      <td style="padding:28px 26px 8px;">
+        <h1 style="margin:0 0 14px;font-size:23px;line-height:1.3;color:#0f172a;font-weight:800;">{$headline}</h1>
+        <p style="font-size:15px;line-height:1.65;color:#334155;margin:0 0 22px;">{$text}</p>
+        <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background:#f8fafc;border:1px solid #eef2f7;border-radius:12px;padding:10px 18px;margin-bottom:24px;">
           {$rowsHtml}
         </table>
-        <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:12px 16px;font-size:12px;color:#1e40af;">
-          <strong>Security Notice:</strong> Never share sensitive booking references or financial verification codes with unauthorized parties.
+        {$button}
+        {$supportLine}
+        <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:12px 16px;font-size:12px;line-height:1.55;color:#9a3412;margin-bottom:24px;">
+          <strong>Security reminder:</strong> {$name} will never ask for your card details, OTP or password by phone, email or chat.
         </div>
       </td>
     </tr>
     <tr>
-      <td style="background:#f8fafc;padding:16px 24px;border-top:1px solid #e2e8f0;text-align:center;font-size:12px;color:#94a3b8;">
-        Automated Flight SaaS Notification. Please do not reply directly to this email.
+      <td style="background:#0f172a;padding:18px 26px;text-align:center;font-size:12px;line-height:1.6;color:#cbd5e1;">
+        Sent by {$name}<br><span style="color:#94a3b8;">This is an automated message about your booking. Please do not reply to this email.</span>
       </td>
     </tr>
   </table>
 </body>
 </html>
 HTML;
+    }
+
+    /**
+     * Brand used in customer emails (config flight.mail_brand). Links and the
+     * logo are only used when they are absolute http(s) URLs.
+     *
+     * @return array{name: string, color: string, logo_url: string, bookings_url: string, support_email: string, support_phone: string}
+     */
+    public function brand(): array
+    {
+        $config = (array) config('flight.mail_brand', []);
+        $website = rtrim(trim((string) ($config['website_url'] ?? '')), '/');
+        $website = preg_match('~^https?://~i', $website) ? $website : '';
+        $color = trim((string) ($config['color'] ?? ''));
+        $logo = trim((string) ($config['logo_url'] ?? '')) ?: ($website !== '' ? $website . '/images/crt-logo.png' : '');
+        $supportEmail = trim((string) ($config['support_email'] ?? ''));
+
+        return [
+            'name' => trim((string) ($config['name'] ?? '')) ?: 'CRT Travels',
+            'color' => preg_match('/^#[0-9a-f]{6}$/i', $color) ? $color : '#F57C00',
+            // Mail clients block plain-http and localhost images; fall back to an initial badge.
+            'logo_url' => str_starts_with(strtolower($logo), 'https://') ? $logo : '',
+            'bookings_url' => $website !== '' ? $website . '/customer/bookings' : '',
+            'support_email' => filter_var($supportEmail, FILTER_VALIDATE_EMAIL) ? $supportEmail : '',
+            'support_phone' => trim((string) ($config['support_phone'] ?? '')),
+        ];
     }
 }

@@ -24,7 +24,7 @@ class FlightDemoSeeder extends Seeder
         $tenantId = $tenant?->id ?? 1;
 
         // 1. Ensure Airports
-        $del = FlightAirport::firstOrCreate(['iata_code' => 'DEL'], [
+        $del = FlightAirport::firstOrCreate(['tenant_id' => $tenantId, 'iata_code' => 'DEL'], [
             'name' => 'Indira Gandhi International Airport',
             'city' => 'New Delhi',
             'city_code' => 'DEL',
@@ -35,7 +35,7 @@ class FlightDemoSeeder extends Seeder
             'is_active' => true,
         ]);
 
-        $bom = FlightAirport::firstOrCreate(['iata_code' => 'BOM'], [
+        $bom = FlightAirport::firstOrCreate(['tenant_id' => $tenantId, 'iata_code' => 'BOM'], [
             'name' => 'Chhatrapati Shivaji Maharaj International Airport',
             'city' => 'Mumbai',
             'city_code' => 'BOM',
@@ -46,7 +46,7 @@ class FlightDemoSeeder extends Seeder
             'is_active' => true,
         ]);
 
-        $blr = FlightAirport::firstOrCreate(['iata_code' => 'BLR'], [
+        $blr = FlightAirport::firstOrCreate(['tenant_id' => $tenantId, 'iata_code' => 'BLR'], [
             'name' => 'Kempegowda International Airport',
             'city' => 'Bengaluru',
             'city_code' => 'BLR',
@@ -58,27 +58,27 @@ class FlightDemoSeeder extends Seeder
         ]);
 
         // 2. Ensure Airlines
-        $ai = FlightAirline::firstOrCreate(['iata_code' => 'AI'], [
+        $ai = FlightAirline::firstOrCreate(['tenant_id' => $tenantId, 'iata_code' => 'AI'], [
             'name' => 'Air India',
             'icao_code' => 'AIC',
             'is_active' => true,
         ]);
 
-        $igo = FlightAirline::firstOrCreate(['iata_code' => '6E'], [
+        $igo = FlightAirline::firstOrCreate(['tenant_id' => $tenantId, 'iata_code' => '6E'], [
             'name' => 'IndiGo',
             'icao_code' => 'IGO',
             'is_active' => true,
         ]);
 
         // 3. Ensure Aircraft
-        $a320 = FlightAircraft::firstOrCreate(['iata_code' => '32N'], [
+        $a320 = FlightAircraft::firstOrCreate(['tenant_id' => $tenantId, 'iata_code' => '32N'], [
             'model' => 'Airbus A320neo',
             'manufacturer' => 'Airbus',
             'total_seats' => 180,
             'is_active' => true,
         ]);
 
-        $a321 = FlightAircraft::firstOrCreate(['iata_code' => '321'], [
+        $a321 = FlightAircraft::firstOrCreate(['tenant_id' => $tenantId, 'iata_code' => '321'], [
             'model' => 'Airbus A321neo',
             'manufacturer' => 'Airbus',
             'total_seats' => 220,

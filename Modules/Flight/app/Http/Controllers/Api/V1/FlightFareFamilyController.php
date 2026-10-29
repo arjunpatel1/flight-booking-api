@@ -6,6 +6,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Modules\Core\Http\Controllers\Controller;
+use Modules\Flight\Services\Catalog\FlightCatalogTenant;
 use Modules\Flight\Models\FlightFareFamily;
 use Modules\Support\ApiResponse;
 
@@ -82,7 +83,7 @@ class FlightFareFamilyController extends Controller
                 Rule::unique('flight_fare_families', 'code')->where('tenant_id', $tenantId),
             ],
             'name' => ['required', 'string', 'max:100'],
-            'cabin_class' => ['required', 'string', Rule::exists('flight_cabin_classes', 'code')->where('is_active', true)],
+            'cabin_class' => ['required', 'string', FlightCatalogTenant::activeCabinClass()],
             'description' => ['nullable', 'string'],
             'features' => ['nullable', 'array'],
             'baggage_allowance' => ['nullable', 'array'],
@@ -133,7 +134,7 @@ class FlightFareFamilyController extends Controller
                     ->ignore($family->id),
             ],
             'name' => ['sometimes', 'string', 'max:100'],
-            'cabin_class' => ['sometimes', 'string', Rule::exists('flight_cabin_classes', 'code')->where('is_active', true)],
+            'cabin_class' => ['sometimes', 'string', FlightCatalogTenant::activeCabinClass()],
             'description' => ['nullable', 'string'],
             'features' => ['nullable', 'array'],
             'baggage_allowance' => ['nullable', 'array'],

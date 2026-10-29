@@ -8,6 +8,7 @@ use Illuminate\Http\Request;
 use Modules\Core\Http\Controllers\Controller;
 use Modules\Flight\Services\Settlement\FlightSettlementService;
 use Modules\Support\ApiResponse;
+use Modules\User\Enums\DefaultRole;
 
 class FlightSettlementController extends Controller
 {
@@ -22,7 +23,8 @@ class FlightSettlementController extends Controller
 
     /**
      * Enforce role-based access for financial actions:
-     * Only users with 'admin', 'super-admin', 'finance', 'agency-admin' or 'flight_settlements.edit' can execute financial actions.
+     * Only platform admins, the agency's Flight Admin, a finance role, or users
+     * granted 'flight_settlements.edit' can execute financial actions.
      */
     protected function authorizeFinancialAction(Request $request): void
     {
@@ -33,7 +35,15 @@ class FlightSettlementController extends Controller
 
         $isAuthorized = false;
         if (method_exists($user, 'hasAnyRole')) {
-            $isAuthorized = $user->hasAnyRole(['admin', 'super-admin', 'finance', 'agency-admin']);
+            // The real role names (DefaultRole) use underscores; the hyphenated
+            // 'super-admin' / 'agency-admin' never existed, so Flight Admins
+            // and super admins were refused.
+            $isAuthorized = $user->hasAnyRole([
+                DefaultRole::SuperAdmin->value,
+                DefaultRole::Admin->value,
+                DefaultRole::FlightAdmin->value,
+                'finance',
+            ]);
         } elseif (method_exists($user, 'hasRole')) {
             $isAuthorized = $user->hasRole('admin') || $user->hasRole('finance');
         }
@@ -100,7 +110,7 @@ class FlightSettlementController extends Controller
 
             return ApiResponse::success($batch, 'Settlement batch created successfully', 201);
         } catch (Exception $e) {
-            return ApiResponse::error('Failed to create settlement batch: ' . $e->getMessage(), 422);
+            return ApiResponse::errors(null, 'Failed to create settlement batch: ' . $e->getMessage(), 422);
         }
     }
 
@@ -116,7 +126,7 @@ class FlightSettlementController extends Controller
             $batch = $this->settlementService->getBatchOrFail($id, $tenantId);
             return ApiResponse::success($batch, 'Settlement batch details retrieved');
         } catch (Exception $e) {
-            return ApiResponse::error('Settlement batch not found', 404);
+            return ApiResponse::errors(null, 'Settlement batch not found', 404);
         }
     }
 
@@ -135,7 +145,7 @@ class FlightSettlementController extends Controller
             $batch = $this->settlementService->processBatch($id, $tenantId, $userId);
             return ApiResponse::success($batch, 'Settlement batch processed successfully');
         } catch (Exception $e) {
-            return ApiResponse::error('Failed to process settlement batch: ' . $e->getMessage(), 422);
+            return ApiResponse::errors(null, 'Failed to process settlement batch: ' . $e->getMessage(), 422);
         }
     }
 
@@ -154,7 +164,7 @@ class FlightSettlementController extends Controller
             $batch = $this->settlementService->retryBatch($id, $tenantId, $userId);
             return ApiResponse::success($batch, 'Settlement batch retried successfully');
         } catch (Exception $e) {
-            return ApiResponse::error('Failed to retry settlement batch: ' . $e->getMessage(), 422);
+            return ApiResponse::errors(null, 'Failed to retry settlement batch: ' . $e->getMessage(), 422);
         }
     }
 
@@ -173,7 +183,7 @@ class FlightSettlementController extends Controller
             $batch = $this->settlementService->reconcileBatch($id, $tenantId, $userId);
             return ApiResponse::success($batch, '4-Way reconciliation completed successfully');
         } catch (Exception $e) {
-            return ApiResponse::error('Reconciliation failed: ' . $e->getMessage(), 422);
+            return ApiResponse::errors(null, 'Reconciliation failed: ' . $e->getMessage(), 422);
         }
     }
 
@@ -197,7 +207,7 @@ class FlightSettlementController extends Controller
                 'is_immutable'    => true,
             ], 'Immutable audit report generated successfully', 201);
         } catch (Exception $e) {
-            return ApiResponse::error('Failed to generate audit report: ' . $e->getMessage(), 422);
+            return ApiResponse::errors(null, 'Failed to generate audit report: ' . $e->getMessage(), 422);
         }
     }
 
@@ -236,7 +246,7 @@ class FlightSettlementController extends Controller
             $mismatch = $this->settlementService->resolveMismatch($id, $userId, $request->input('notes'), $tenantId);
             return ApiResponse::success($mismatch, 'Discrepancy resolved successfully');
         } catch (Exception $e) {
-            return ApiResponse::error('Failed to resolve mismatch: ' . $e->getMessage(), 422);
+            return ApiResponse::errors(null, 'Failed to resolve mismatch: ' . $e->getMessage(), 422);
         }
     }
 
@@ -268,7 +278,7 @@ class FlightSettlementController extends Controller
             $result = $this->settlementService->getAuditReport($id, $tenantId);
             return ApiResponse::success($result, 'Audit report retrieved and cryptographically verified');
         } catch (Exception $e) {
-            return ApiResponse::error('Audit report not found', 404);
+            return ApiResponse::errors(null, 'Audit report not found', 404);
         }
     }
 }

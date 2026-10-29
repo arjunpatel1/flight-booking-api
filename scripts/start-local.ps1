@@ -54,6 +54,13 @@ $nginxPrefixArg = ($nginxPrefix -replace '\\', '/') + '/'
 $nginxArgs = @('-p', $nginxPrefixArg, '-c', 'conf/nginx.conf')
 $nginxStartArgs = @('-p', "`"$nginxPrefixArg`"", '-c', 'conf/nginx.conf')
 
+# Cache routes (1,300+ across 42 modules) and event listeners so each request
+# skips rebuilding them. Rebuilt on every start, so they always match the code;
+# after adding or changing routes mid-session run: php artisan route:cache
+# Config is deliberately not cached: some code still reads .env directly.
+& $php artisan route:cache | Out-Null
+& $php artisan event:cache | Out-Null
+
 # php-cgi exits after 500 requests by default; 0 keeps the workers alive.
 $env:PHP_FCGI_MAX_REQUESTS = '0'
 

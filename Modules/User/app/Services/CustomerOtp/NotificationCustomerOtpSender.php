@@ -15,7 +15,8 @@ class NotificationCustomerOtpSender implements CustomerOtpSender
         private readonly EmailChannel $email,
     ) {}
 
-    public function send(string $channel, string $recipient, string $otp, int $ttlMinutes, int $tenantId, string $restaurantName): ?string
+    // SensitiveParameter keeps the code out of exception stack traces in the log.
+    public function send(string $channel, string $recipient, #[\SensitiveParameter] string $otp, int $ttlMinutes, int $tenantId, string $restaurantName): ?string
     {
         $otpTemplate = collect(setting('whatsapp_templates') ?: [])
             ->first(fn ($template) => is_array($template)
@@ -66,7 +67,7 @@ class NotificationCustomerOtpSender implements CustomerOtpSender
     }
 
     /** The restaurant controls wording only; security values are injected server-side. */
-    private function emailOtpPayload(int $tenantId, string $restaurantName, string $otp, int $ttlMinutes): array
+    private function emailOtpPayload(int $tenantId, string $restaurantName, #[\SensitiveParameter] string $otp, int $ttlMinutes): array
     {
         $settings = CustomerAppSetting::query()->withoutGlobalScopes()->where('tenant_id', $tenantId)->first()?->settings ?? [];
         $tenantSettings = Tenant::query()->withoutGlobalScopes()->whereKey($tenantId)->first(['id', 'settings'])?->settings ?? [];

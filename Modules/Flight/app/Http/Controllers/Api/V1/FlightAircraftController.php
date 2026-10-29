@@ -6,6 +6,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Modules\Core\Http\Controllers\Controller;
 use Modules\Flight\Models\FlightAircraft;
+use Modules\Flight\Services\Catalog\FlightCatalogTenant;
 use Modules\Support\ApiResponse;
 
 class FlightAircraftController extends Controller
@@ -15,7 +16,7 @@ class FlightAircraftController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $query = FlightAircraft::query();
+        $query = FlightAircraft::ownedByCatalog();
 
         if ($request->boolean('active_only', false)) {
             $query->where('is_active', true);
@@ -40,7 +41,7 @@ class FlightAircraftController extends Controller
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'iata_code' => ['required', 'string', 'size:3', 'unique:flight_aircraft,iata_code'],
+            'iata_code' => ['required', 'string', 'size:3', FlightCatalogTenant::unique('flight_aircraft', 'iata_code')],
             'aircraft_type' => ['nullable', 'string', 'max:50'],
             'model' => ['required', 'string', 'max:100'],
             'registration' => ['nullable', 'string', 'max:30'],
@@ -63,8 +64,8 @@ class FlightAircraftController extends Controller
     public function show(string $identifier): JsonResponse
     {
         $aircraft = is_numeric($identifier)
-            ? FlightAircraft::findOrFail($identifier)
-            : FlightAircraft::where('iata_code', strtoupper($identifier))->firstOrFail();
+            ? FlightAircraft::ownedByCatalog()->findOrFail($identifier)
+            : FlightAircraft::ownedByCatalog()->where('iata_code', strtoupper($identifier))->firstOrFail();
 
         return ApiResponse::success($aircraft);
     }
@@ -75,8 +76,8 @@ class FlightAircraftController extends Controller
     public function update(Request $request, string $identifier): JsonResponse
     {
         $aircraft = is_numeric($identifier)
-            ? FlightAircraft::findOrFail($identifier)
-            : FlightAircraft::where('iata_code', strtoupper($identifier))->firstOrFail();
+            ? FlightAircraft::ownedByCatalog()->findOrFail($identifier)
+            : FlightAircraft::ownedByCatalog()->where('iata_code', strtoupper($identifier))->firstOrFail();
 
         $validated = $request->validate([
             'aircraft_type' => ['nullable', 'string', 'max:50'],
@@ -99,8 +100,8 @@ class FlightAircraftController extends Controller
     public function destroy(string $identifier): JsonResponse
     {
         $aircraft = is_numeric($identifier)
-            ? FlightAircraft::findOrFail($identifier)
-            : FlightAircraft::where('iata_code', strtoupper($identifier))->firstOrFail();
+            ? FlightAircraft::ownedByCatalog()->findOrFail($identifier)
+            : FlightAircraft::ownedByCatalog()->where('iata_code', strtoupper($identifier))->firstOrFail();
 
         $aircraft->delete();
 

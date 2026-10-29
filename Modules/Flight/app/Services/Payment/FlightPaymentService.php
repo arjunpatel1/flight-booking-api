@@ -391,10 +391,23 @@ class FlightPaymentService
             throw new DomainException('Missing or invalid payment webhook signature.');
         }
 
+        $event = $payload['event'] ?? 'payment.captured';
+
+        // Refund lifecycle (refund.created / refund.processed / refund.failed)
+        // confirms that money sent back through Razorpay actually settled.
+        if (str_starts_with((string) $event, 'refund.')) {
+            $refundEntity = (array) data_get($payload, 'payload.refund.entity', []);
+            if ($refundEntity === []) {
+                return ['status' => 'ignored', 'message' => 'Refund webhook without a refund entity.'];
+            }
+
+            return app(\Modules\Flight\Services\Servicing\FlightServicingService::class)
+                ->applyGatewayRefundEvent((string) $event, $refundEntity);
+        }
+
         $entity = data_get($payload, 'payload.payment.entity') ?? $payload;
         $orderId = $entity['order_id'] ?? ($payload['order_id'] ?? null);
         $paymentId = $entity['id'] ?? ($payload['payment_id'] ?? null);
-        $event = $payload['event'] ?? 'payment.captured';
 
         if (empty($orderId) && empty($paymentId)) {
             return ['status' => 'ignored', 'message' => 'No order or payment identifier in webhook.'];
@@ -511,7 +524,9 @@ class FlightPaymentService
                 $walletInfo = [
                     'wallet_id'        => $wallet->id,
                     'account_number'   => $wallet->account_number,
-                    'owner_type'       => $wallet->owner_type->value,
+                    // owner_type is stored as a plain string on some wallets;
+                    // ->value on it threw and silently hid the wallet option.
+                    'owner_type'       => is_object($wallet->owner_type) ? $wallet->owner_type->value : (string) $wallet->owner_type,
                     'currency'         => $wallet->currency,
                     'balance'          => (float) $wallet->balance,
                     'credit_limit'     => (float) $wallet->credit_limit,
@@ -537,6 +552,11 @@ class FlightPaymentService
             $availableGateways[] = ['id' => 'mock', 'name' => 'Mock Gateway (Test Driver)', 'key_id' => null];
         }
 
+        $pricing = (array) ($booking->pricing_breakdown ?? []);
+        $ancillariesAmount = (float) $booking->ancillaries()->sum('price');
+        $itinerary = (array) ($booking->itinerary ?? []);
+        $notPayableReason = $this->paymentOptionsBlocker($booking);
+
         return [
             'booking_reference'   => $booking->booking_reference,
             'booking_status'      => $booking->booking_status->value,
@@ -544,13 +564,65 @@ class FlightPaymentService
             'total_amount'        => $amount,
             'payable_amount'      => $amount,
             'currency'            => $booking->currency ?: 'INR',
+            // Checkout pages must not offer payment for cancelled/failed bookings
+            // or an expired hold; initiatePayment() enforces the same rules.
+            'is_payable'          => $notPayableReason === null,
+            'not_payable_reason'  => $notPayableReason,
             'pricing_breakdown'   => $booking->pricing_breakdown,
-            'ancillaries_amount'  => $booking->ancillaries()->sum('price'),
+            // Shape expected by the checkout pages (FlightPaymentOptions.fare_breakdown).
+            'fare_breakdown'      => [
+                'base_fare'         => (float) ($pricing['base_fare'] ?? $pricing['supplier_fare'] ?? 0),
+                'taxes'             => (float) ($pricing['taxes'] ?? 0) + (float) ($pricing['gst'] ?? 0),
+                'markup'            => (float) ($pricing['client_markup'] ?? 0) + (float) ($pricing['tenant_markup'] ?? 0) + (float) ($pricing['platform_markup'] ?? 0),
+                'convenience_fee'   => (float) ($pricing['convenience_fee'] ?? 0),
+                'discount'          => (float) ($pricing['discount'] ?? 0),
+                'ancillaries_total' => $ancillariesAmount,
+            ],
+            'itinerary'           => [
+                'flight_number'     => $itinerary['flight_number'] ?? null,
+                'airline_name'      => data_get($itinerary, 'airline.name') ?: data_get($itinerary, 'airline.code'),
+                'cabin_class'       => $itinerary['cabin_class'] ?? null,
+                'departure_airport' => data_get($itinerary, 'origin.code'),
+                'departure_city'    => data_get($itinerary, 'origin.city'),
+                'departure_time'    => trim((data_get($itinerary, 'departure.date') ?: data_get($itinerary, 'departure_date') ?: '').' '.substr((string) (data_get($itinerary, 'departure.time') ?: ''), 0, 5)) ?: null,
+                'arrival_airport'   => data_get($itinerary, 'destination.code'),
+                'arrival_city'      => data_get($itinerary, 'destination.city'),
+                'arrival_time'      => is_string($itinerary['arrival_time'] ?? null) ? preg_replace('/(\d{2}:\d{2}):\d{2}$/', '$1', $itinerary['arrival_time']) : null,
+            ],
+            'passengers'          => $booking->passengers()->get(['passenger_type', 'first_name', 'last_name'])
+                ->map(fn ($p) => ['type' => is_object($p->passenger_type) ? $p->passenger_type->value : $p->passenger_type, 'name' => trim("{$p->first_name} {$p->last_name}")])
+                ->values(),
+            'ancillaries_amount'  => $ancillariesAmount,
             'available_gateways'  => $availableGateways,
             'gateways'            => array_column($availableGateways, 'id'),
             'b2b_wallet'          => $walletInfo,
             'wallet'              => $walletInfo,
         ];
+    }
+
+    /**
+     * Why a booking cannot be paid right now, mirroring verifyBookingPayability()
+     * without its side effects (that method may renew the fare quote). A paid
+     * booking returns null: the checkout page shows it as completed instead.
+     */
+    protected function paymentOptionsBlocker(FlightBooking $booking): ?string
+    {
+        $bookingStatus = strtoupper(is_object($booking->booking_status) ? $booking->booking_status->value : (string) $booking->booking_status);
+        $paymentStatus = strtoupper(is_object($booking->payment_status) ? $booking->payment_status->value : (string) $booking->payment_status);
+        if ($paymentStatus === 'PAID') {
+            return null;
+        }
+        if ($bookingStatus === 'CANCELLED') {
+            return 'This booking was cancelled before it was paid, so it can no longer be paid. Create a new booking instead.';
+        }
+        if ($bookingStatus === 'FAILED') {
+            return 'This booking failed and can no longer be paid. Create a new booking instead.';
+        }
+        if ($booking->hold && $booking->hold->isExpired()) {
+            return 'The seat hold for this booking has expired, so it can no longer be paid. Search again to book this flight.';
+        }
+
+        return null;
     }
 
     // ── Helper Verification Methods ──────────────────────────────────────────

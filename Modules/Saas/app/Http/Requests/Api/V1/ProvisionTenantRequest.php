@@ -36,7 +36,7 @@ class ProvisionTenantRequest extends FormRequest
             'staff_name' => ['nullable', 'string', 'max:255', 'required_with:staff_email'],
             'staff_email' => ['nullable', 'email', 'max:255', 'different:email', 'required_with:staff_name'],
             'staff_password' => ['nullable', 'string', 'min:8', 'max:255', 'required_with:staff_email'],
-            'staff_role' => ['nullable', 'string', Rule::in(['manager', 'cashier', 'kitchen', 'waiter'])],
+            'staff_role' => ['nullable', 'string', Rule::in(['flight_admin', 'flight_agent', 'flight_distributor', 'manager', 'cashier', 'kitchen', 'waiter'])],
             'plan' => ['nullable', 'string', 'max:120'],
             'trial_days' => ['nullable', 'integer', 'min:0', 'max:365'],
             'branch_name' => ['nullable', 'string', 'max:255'],

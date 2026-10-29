@@ -81,8 +81,10 @@ return [
         'whatsapp_ordering',
         'whatsapp_managed_api',
         'whatsapp_human_handoff',
+        'flight_booking',
     ],
     'enterprise_features' => [
+        'flight_booking',
         'pos',
         'kitchen',
         'qr_ordering',

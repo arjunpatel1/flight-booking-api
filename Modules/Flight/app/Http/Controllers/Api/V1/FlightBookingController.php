@@ -88,6 +88,9 @@ class FlightBookingController extends Controller
 
             return ApiResponse::created([
                 'booking_reference' => $booking->booking_reference,
+                // Shown only here. A guest sends it back as X-Booking-Token to
+                // pay for the booking and fetch its e-ticket.
+                'access_token'      => $booking->issueAccessToken(),
                 'id'                => $booking->id,
                 'booking_status'    => $booking->booking_status->value,
                 'status_label'      => $booking->booking_status->label(),
@@ -200,6 +203,9 @@ class FlightBookingController extends Controller
                     'contact_email'    => $p->contact_email,
                     'contact_phone'    => $p->contact_phone,
                 ]),
+                'cancellation_fee'  => (float) $booking->cancellation_fee,
+                'refunded_amount'   => (float) $booking->refunded_amount,
+                'refunds'           => $booking->refunds()->latest('id')->get()->map(fn ($r) => self::refundPayload($r))->values(),
                 'created_at'        => $booking->created_at?->toIso8601String(),
                 'updated_at'        => $booking->updated_at?->toIso8601String(),
             ]);
@@ -296,6 +302,9 @@ class FlightBookingController extends Controller
             'last_page'    => $paginator->lastPage(),
             'per_page'     => $paginator->perPage(),
             'total'        => $paginator->total(),
+            // Summary cards count every booking matching the table's filters;
+            // counting the current page client-side only saw the first rows.
+            'summary'      => $this->bookingService->bookingSummary($filters, $tenant),
         ]);
     }
 
@@ -392,6 +401,7 @@ class FlightBookingController extends Controller
             $tenant = $this->resolveTenant($request);
             $reason = $validated['reason'] ?? 'Customer request';
             $booking = $this->bookingService->cancelBooking($identifier, $reason, $tenant);
+            $refund = $booking->refunds()->latest('id')->first();
 
             return ApiResponse::success([
                 'booking_reference'   => $booking->booking_reference,
@@ -399,13 +409,40 @@ class FlightBookingController extends Controller
                 'payment_status'      => $booking->payment_status->value,
                 'cancellation_reason' => $booking->cancellation_reason,
                 'cancelled_at'        => $booking->cancelled_at?->toIso8601String(),
-                'message'             => 'Booking cancelled successfully.',
+                'cancellation_fee'    => (float) $booking->cancellation_fee,
+                'refund'              => $refund ? self::refundPayload($refund) : null,
+                'message'             => $refund
+                    ? 'Booking cancelled. Refund ' . strtolower($refund->status->value) . '.'
+                    : 'Booking cancelled successfully.',
             ]);
         } catch (DomainException $e) {
             return ApiResponse::errors(null, $e->getMessage(), 422);
         } catch (\Throwable $e) {
             return ApiResponse::errors(null, $e->getMessage(), 500);
         }
+    }
+
+    /** Refund fields shown to staff on booking details and after cancelling. */
+    public static function refundPayload(\Modules\Flight\Models\FlightRefund $refund): array
+    {
+        return [
+            'id'                   => $refund->id,
+            'refund_reference'     => $refund->refund_reference,
+            'refund_type'          => $refund->refund_type,
+            'refund_method'        => $refund->refund_method?->value,
+            'status'               => $refund->status?->value,
+            'original_amount'      => (float) $refund->original_amount,
+            'cancellation_penalty' => (float) $refund->cancellation_penalty,
+            'refund_amount'        => (float) $refund->refund_amount,
+            'currency'             => $refund->currency,
+            'gateway_refund_id'    => $refund->gateway_refund_id,
+            'failure_reason'       => $refund->failure_reason,
+            'applied_rule'         => data_get($refund->audit_meta, 'applied_rule'),
+            'breakdown'            => data_get($refund->audit_meta, 'breakdown', []),
+            'reason'               => $refund->reason,
+            'processed_at'         => $refund->processed_at?->toIso8601String(),
+            'created_at'           => $refund->created_at?->toIso8601String(),
+        ];
     }
 
     /**

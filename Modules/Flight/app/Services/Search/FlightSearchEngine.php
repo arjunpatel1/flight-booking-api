@@ -6,9 +6,9 @@ use Carbon\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
-use Modules\Flight\Models\FlightAirport;
 use Modules\Flight\Models\FlightFare;
 use Modules\Flight\Models\FlightInventory;
+use Modules\Flight\Models\FlightRoute;
 use Modules\Flight\Models\FlightSupplier;
 use Modules\Flight\Services\Pricing\FlightFareAggregationEngine;
 use Modules\Flight\Services\Pricing\FlightPricingEngine;
@@ -164,9 +164,6 @@ class FlightSearchEngine
      */
     protected function searchInternalInventory(FlightSearchParams $params, ?Tenant $tenant = null): array
     {
-        $originAirport = FlightAirport::where('iata_code', $params->origin)->first();
-        $destAirport = FlightAirport::where('iata_code', $params->destination)->first();
-
         $query = FlightInventory::active()
             ->with(['airline', 'originAirport', 'destinationAirport', 'aircraft', 'fares.fareFamily']);
 
@@ -174,14 +171,10 @@ class FlightSearchEngine
             $query->where('tenant_id', $tenant->id);
         }
 
-        // Route matching
-        if ($originAirport && $destAirport) {
-            $query->where('origin_airport_id', $originAirport->id)
-                  ->where('destination_airport_id', $destAirport->id);
-        } else {
-            $query->whereHas('originAirport', fn ($q) => $q->where('iata_code', $params->origin))
-                  ->whereHas('destinationAirport', fn ($q) => $q->where('iata_code', $params->destination));
-        }
+        // Route matching by IATA code: every tenant has its own airport rows,
+        // so one airport id would only ever match a single tenant's inventory.
+        $query->whereHas('originAirport', fn ($q) => $q->where('iata_code', $params->origin))
+              ->whereHas('destinationAirport', fn ($q) => $q->where('iata_code', $params->destination));
 
         // Minimum capacity
         $totalPax = $params->totalPassengers();
@@ -198,6 +191,25 @@ class FlightSearchEngine
 
         $carbonDate = Carbon::parse($params->departureDate);
         $today = Carbon::today();
+
+        // Inventory rows only carry a time of day, so a flight created from a
+        // dated admin route would otherwise match every date. Collect the dates
+        // each flight is actually scheduled on, keyed the same way the booking
+        // service links inventory to its route.
+        $routeDates = FlightRoute::query()
+            ->withoutGlobalScopes()
+            ->whereIn('tenant_id', $inventories->pluck('tenant_id')->filter()->unique())
+            ->whereIn('flight_number', $inventories->pluck('flight_number')->unique())
+            ->whereNotNull('flight_date')
+            ->get(['tenant_id', 'flight_number', 'origin_airport_id', 'destination_airport_id', 'flight_date', 'flight_time'])
+            ->groupBy(fn (FlightRoute $route) => $this->routeKey(
+                $route->tenant_id,
+                $route->flight_number,
+                $route->origin_airport_id,
+                $route->destination_airport_id,
+                $route->flight_time,
+            ))
+            ->map(fn ($routes) => $routes->map(fn (FlightRoute $route) => $route->flight_date->toDateString())->unique());
         $depDayOfWeek = strtolower($carbonDate->format('l'));
         $depDayShort = strtolower($carbonDate->format('D'));
         $depDayIso = (int) $carbonDate->format('N');
@@ -213,8 +225,20 @@ class FlightSearchEngine
                 continue;
             }
 
-            // Check operating days if specified
-            if (! empty($inventory->operating_days)) {
+            $scheduledDates = $routeDates->get($this->routeKey(
+                $inventory->tenant_id,
+                $inventory->flight_number,
+                $inventory->origin_airport_id,
+                $inventory->destination_airport_id,
+                $inventory->departure_time,
+            ));
+            if ($scheduledDates !== null) {
+                // A dated route is the source of truth: only that day operates.
+                if (! $scheduledDates->contains($carbonDate->toDateString())) {
+                    continue;
+                }
+            } elseif (! empty($inventory->operating_days)) {
+                // Recurring inventory without a dated route: check operating days
                 $opDays = (array) $inventory->operating_days;
                 $matchesDay = false;
                 foreach ($opDays as $opDay) {
@@ -242,6 +266,17 @@ class FlightSearchEngine
         }
 
         return $itineraries;
+    }
+
+    private function routeKey(mixed $tenantId, mixed $flightNumber, mixed $originId, mixed $destinationId, mixed $time): string
+    {
+        return implode('|', [
+            (int) $tenantId,
+            strtoupper(trim((string) $flightNumber)),
+            (int) $originId,
+            (int) $destinationId,
+            substr((string) $time, 0, 5),
+        ]);
     }
 
     /**

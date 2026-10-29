@@ -5,6 +5,7 @@ namespace Modules\Flight\Http\Controllers\Api\V1;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Modules\Core\Http\Controllers\Controller;
+use Modules\Flight\Services\Catalog\FlightCatalogTenant;
 use Modules\Flight\Models\FlightCommissionLog;
 use Modules\Flight\Models\FlightCommissionRule;
 use Modules\Flight\Services\Commission\DTOs\CommissionCalculationRequest;
@@ -67,10 +68,10 @@ class FlightCommissionRuleController extends Controller
             'recipient_tier'         => 'required|in:SUPER_ADMIN,TENANT,DISTRIBUTOR,AGENT',
             'recipient_id'           => 'nullable|integer',
             'flight_supplier_id'     => 'nullable|integer|exists:flight_suppliers,id',
-            'airline_id'             => 'nullable|integer|exists:flight_airlines,id',
+            'airline_id'             => ['nullable', 'integer', FlightCatalogTenant::exists('flight_airlines')],
             'airline_code'           => 'nullable|string|max:10',
-            'origin_airport_id'      => 'nullable|integer|exists:flight_airports,id',
-            'destination_airport_id' => 'nullable|integer|exists:flight_airports,id',
+            'origin_airport_id'      => ['nullable', 'integer', FlightCatalogTenant::exists('flight_airports')],
+            'destination_airport_id' => ['nullable', 'integer', FlightCatalogTenant::exists('flight_airports')],
             'cabin_class'            => 'nullable|string|max:30',
             'fare_family_id'         => 'nullable|integer|exists:flight_fare_families,id',
             'flight_number'          => 'nullable|string|max:20',
@@ -124,10 +125,10 @@ class FlightCommissionRuleController extends Controller
             'recipient_tier'         => 'sometimes|required|in:SUPER_ADMIN,TENANT,DISTRIBUTOR,AGENT',
             'recipient_id'           => 'nullable|integer',
             'flight_supplier_id'     => 'nullable|integer|exists:flight_suppliers,id',
-            'airline_id'             => 'nullable|integer|exists:flight_airlines,id',
+            'airline_id'             => ['nullable', 'integer', FlightCatalogTenant::exists('flight_airlines')],
             'airline_code'           => 'nullable|string|max:10',
-            'origin_airport_id'      => 'nullable|integer|exists:flight_airports,id',
-            'destination_airport_id' => 'nullable|integer|exists:flight_airports,id',
+            'origin_airport_id'      => ['nullable', 'integer', FlightCatalogTenant::exists('flight_airports')],
+            'destination_airport_id' => ['nullable', 'integer', FlightCatalogTenant::exists('flight_airports')],
             'cabin_class'            => 'nullable|string|max:30',
             'fare_family_id'         => 'nullable|integer|exists:flight_fare_families,id',
             'flight_number'          => 'nullable|string|max:20',

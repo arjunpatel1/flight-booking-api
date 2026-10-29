@@ -5,6 +5,7 @@ use Modules\Notification\Http\Controllers\Api\V1\NotificationController;
 use Modules\Notification\Http\Controllers\Api\V1\WhatsAppLogController;
 use Modules\Notification\Http\Controllers\Api\V1\WhatsAppMessageController;
 use Modules\Notification\Http\Controllers\Api\V1\TenantMailboxController;
+use Modules\Notification\Http\Controllers\Api\V1\TenantMailSettingsController;
 use Modules\Notification\Http\Controllers\Api\V1\MailgunInboundController;
 use Modules\Notification\Http\Controllers\Api\V1\MailgunEventController;
 
@@ -14,6 +15,12 @@ Route::post('mailgun/inbound', MailgunInboundController::class)
 Route::post('mailgun/events', MailgunEventController::class)
     ->withoutMiddleware(['auth', \Modules\Saas\Http\Middleware\EnsureAuthenticatedTenant::class])
     ->middleware('throttle:240,1');
+
+Route::prefix('tenant-mail-settings')->middleware(['can:admin.settings.edit', 'throttle:30,1'])->group(function () {
+    Route::get('/', [TenantMailSettingsController::class, 'show']);
+    Route::put('/', [TenantMailSettingsController::class, 'update']);
+    Route::post('/test', [TenantMailSettingsController::class, 'test'])->middleware('throttle:5,1');
+});
 
 Route::prefix('tenant-mailbox')->middleware(['can:admin.notifications.manage', 'throttle:60,1'])->group(function () {
     Route::get('/meta', [TenantMailboxController::class, 'meta']);

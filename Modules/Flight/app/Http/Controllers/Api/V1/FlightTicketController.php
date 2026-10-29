@@ -10,6 +10,7 @@ use Illuminate\Http\Response;
 use Modules\Flight\Models\FlightBooking;
 use Modules\Flight\Services\Ticketing\FlightTicketingService;
 use Modules\Saas\Support\TenantContext;
+use Modules\User\Enums\DefaultRole;
 
 class FlightTicketController extends Controller
 {
@@ -143,7 +144,12 @@ class FlightTicketController extends Controller
         $user = $request->user();
         if ($user && $booking->user_id) {
             $isStaffOrAdmin = method_exists($user, 'hasAnyRole')
-                ? ($user->hasAnyRole(['admin', 'agent', 'super-admin', 'agency-admin', 'agency-agent']) || $user->hasRole('admin'))
+                // Real role names (DefaultRole); the hyphenated ones never existed,
+                // so agency staff were refused tickets booked by a colleague.
+                ? $user->hasAnyRole([
+                    DefaultRole::SuperAdmin->value, DefaultRole::Admin->value, DefaultRole::FlightAdmin->value,
+                    DefaultRole::FlightDistributor->value, DefaultRole::FlightAgent->value,
+                ])
                 : false;
 
             if (! $isStaffOrAdmin && (int) $booking->user_id !== (int) $user->id) {

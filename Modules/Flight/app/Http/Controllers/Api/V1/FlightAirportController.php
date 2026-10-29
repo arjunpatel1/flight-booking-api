@@ -6,6 +6,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Modules\Core\Http\Controllers\Controller;
 use Modules\Flight\Models\FlightAirport;
+use Modules\Flight\Services\Catalog\FlightCatalogTenant;
 use Modules\Support\ApiResponse;
 
 class FlightAirportController extends Controller
@@ -15,7 +16,7 @@ class FlightAirportController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $query = FlightAirport::query();
+        $query = FlightAirport::ownedByCatalog();
 
         if ($request->boolean('active_only', false)) {
             $query->where('is_active', true);
@@ -40,7 +41,7 @@ class FlightAirportController extends Controller
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'iata_code' => ['required', 'string', 'size:3', 'unique:flight_airports,iata_code'],
+            'iata_code' => ['required', 'string', 'size:3', FlightCatalogTenant::unique('flight_airports', 'iata_code')],
             'icao_code' => ['nullable', 'string', 'size:4'],
             'name' => ['required', 'string', 'max:191'],
             'city' => ['required', 'string', 'max:100'],
@@ -73,8 +74,8 @@ class FlightAirportController extends Controller
     public function show(string $identifier): JsonResponse
     {
         $airport = is_numeric($identifier)
-            ? FlightAirport::findOrFail($identifier)
-            : FlightAirport::where('iata_code', strtoupper($identifier))->firstOrFail();
+            ? FlightAirport::ownedByCatalog()->findOrFail($identifier)
+            : FlightAirport::ownedByCatalog()->where('iata_code', strtoupper($identifier))->firstOrFail();
 
         return ApiResponse::success($airport);
     }
@@ -85,8 +86,8 @@ class FlightAirportController extends Controller
     public function update(Request $request, string $identifier): JsonResponse
     {
         $airport = is_numeric($identifier)
-            ? FlightAirport::findOrFail($identifier)
-            : FlightAirport::where('iata_code', strtoupper($identifier))->firstOrFail();
+            ? FlightAirport::ownedByCatalog()->findOrFail($identifier)
+            : FlightAirport::ownedByCatalog()->where('iata_code', strtoupper($identifier))->firstOrFail();
 
         $validated = $request->validate([
             'name' => ['sometimes', 'required', 'string', 'max:191'],
@@ -123,8 +124,8 @@ class FlightAirportController extends Controller
     public function destroy(string $identifier): JsonResponse
     {
         $airport = is_numeric($identifier)
-            ? FlightAirport::findOrFail($identifier)
-            : FlightAirport::where('iata_code', strtoupper($identifier))->firstOrFail();
+            ? FlightAirport::ownedByCatalog()->findOrFail($identifier)
+            : FlightAirport::ownedByCatalog()->where('iata_code', strtoupper($identifier))->firstOrFail();
 
         $airport->delete();
 
