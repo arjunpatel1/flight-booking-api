@@ -3,10 +3,19 @@
 namespace Modules\Flight\Services\Booking;
 
 use DomainException;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
+use Modules\Flight\Models\FlightBooking;
+use Modules\Flight\Models\FlightCoupon;
+use Modules\Flight\Models\FlightDiscount;
 use Modules\Flight\Models\FlightFareQuote;
-use Modules\Voucher\Models\Voucher;
+use Modules\Flight\Models\FlightOffer;
 
+/**
+ * Customer-side flight coupons (entered by code) and flight discounts (picked
+ * from a list). Only the offers of the tenant that owns the quote are ever
+ * considered.
+ */
 class FlightOfferService
 {
     public function offersForQuote(string $quoteIdentifier): array
@@ -14,21 +23,20 @@ class FlightOfferService
         $quote = $this->quote($quoteIdentifier);
         $subtotal = (float) $quote->customer_price;
 
-        $offers = $this->flightVouchers($quote->tenant_id)->get()->filter(function (Voucher $voucher) use ($subtotal, $quote) {
-            if ((bool) data_get($voucher->meta, 'flight_auto_apply', false)) return false;
-            if ($voucher->minimum_spend && $subtotal < (float) $voucher->getRawOriginal('minimum_spend')) return false;
-            if ($voucher->maximum_spend && $subtotal > (float) $voucher->getRawOriginal('maximum_spend')) return false;
-            if ($voucher->usageLimitReached()) return false;
-            if (! $this->matchesFlightConditions($voucher, $quote)) return false;
+        $offers = $this->coupons($quote->tenant_id)->get()->filter(function (FlightCoupon $coupon) use ($subtotal, $quote) {
+            if ($coupon->minimum_spend !== null && $subtotal < (float) $coupon->minimum_spend) return false;
+            if ($coupon->maximum_spend !== null && $subtotal > (float) $coupon->maximum_spend) return false;
+            if ($coupon->usageLimitReached()) return false;
+            if (! $this->matchesFlightConditions($coupon, $quote)) return false;
             return true;
-        })->map(fn (Voucher $voucher) => [
-            'id' => $voucher->id,
-            'code' => $voucher->code,
-            'name' => $voucher->name,
-            'description' => $voucher->description,
-            'value_text' => $voucher->getValueText(),
-            'minimum_spend' => $voucher->getRawOriginal('minimum_spend'),
-            'ends_at' => optional($voucher->end_date)->toDateString(),
+        })->map(fn (FlightCoupon $coupon) => [
+            'id' => $coupon->id,
+            'code' => $coupon->code,
+            'name' => $coupon->localized('name'),
+            'description' => $coupon->localized('description'),
+            'value_text' => $coupon->valueText(),
+            'minimum_spend' => $coupon->minimum_spend,
+            'ends_at' => optional($coupon->end_date)->toDateString(),
         ])->values();
 
         return [
@@ -40,42 +48,34 @@ class FlightOfferService
     public function validateCode(string $quoteIdentifier, string $code, ?int $discountId = null): array
     {
         $quote = $this->quote($quoteIdentifier);
-        $voucher = $this->flightVouchers($quote->tenant_id)
-            ->whereRaw('LOWER(code) = ?', [mb_strtolower(trim($code))])->first();
+        $coupon = $this->findCoupon($quote->tenant_id, $code);
 
-        if (! $voucher || ! $voucher->valid() || $voucher->usageLimitReached()) {
+        if (! $coupon || $coupon->usageLimitReached()) {
             throw new DomainException('This offer code is invalid, expired, or has reached its usage limit.');
         }
-        if ((bool) data_get($voucher->meta, 'flight_auto_apply', false)) {
-            throw new DomainException('Select this in available flight discounts instead of entering it as a coupon code.');
-        }
-        $customerId = $quote->user_id;
-        if ($customerId && $voucher->per_customer_limit) {
-            $redemptions = DB::table('flight_offer_redemptions')->where('voucher_id', $voucher->id)->where('user_id', $customerId)->count();
-            if ($redemptions >= (int) $voucher->per_customer_limit) {
-                throw new DomainException('You have already used this offer the maximum number of times.');
-            }
+        if ($this->customerLimitReached($coupon, $quote->user_id)) {
+            throw new DomainException('You have already used this offer the maximum number of times.');
         }
 
         $selectedDiscount = $discountId ? $this->validateDiscount($quote, $discountId) : null;
         $baseSubtotal = max(0, (float) $quote->customer_price);
         $subtotal = max(0, $baseSubtotal - (float) ($selectedDiscount['discount'] ?? 0));
-        $minimum = (float) ($voucher->getRawOriginal('minimum_spend') ?? 0);
-        $maximum = $voucher->getRawOriginal('maximum_spend');
+        $minimum = (float) ($coupon->minimum_spend ?? 0);
+        $maximum = $coupon->maximum_spend;
         if ($subtotal < $minimum || ($maximum !== null && $subtotal > (float) $maximum)) {
             throw new DomainException('This offer does not meet the booking amount requirements.');
         }
-        if (! $this->matchesFlightConditions($voucher, $quote)) {
+        if (! $this->matchesFlightConditions($coupon, $quote)) {
             throw new DomainException('This offer is not valid for the selected flight, route, or fare family.');
         }
 
-        $discount = $this->calculateDiscount($voucher, $subtotal);
+        $discount = $coupon->discountOn($subtotal);
 
         if ($discount <= 0) throw new DomainException('This offer does not apply a discount to this booking.');
 
         return [
-            'code' => $voucher->code,
-            'name' => $voucher->name,
+            'code' => $coupon->code,
+            'name' => $coupon->localized('name'),
             'discount' => $discount,
             'automatic_discount' => (float) ($selectedDiscount['discount'] ?? 0),
             'subtotal' => round($subtotal, 2),
@@ -87,32 +87,27 @@ class FlightOfferService
     {
         $quote = $quoteIdentifier instanceof FlightFareQuote ? $quoteIdentifier : $this->quote($quoteIdentifier);
         $subtotal = max(0, (float) $quote->customer_price);
-        $customerId = $quote->user_id;
         $options = [];
 
-        foreach ($this->flightVouchers($quote->tenant_id)->get() as $voucher) {
-            if (!(bool) data_get($voucher->meta, 'flight_auto_apply', false)) continue;
-            if (! $this->matchesFlightConditions($voucher, $quote)) continue;
+        foreach ($this->discounts($quote->tenant_id)->get() as $offer) {
+            if (! $this->matchesFlightConditions($offer, $quote)) continue;
 
             $reason = null;
-            if ($voucher->minimum_spend && $subtotal < (float) $voucher->getRawOriginal('minimum_spend')) {
+            if ($offer->minimum_spend !== null && $subtotal < (float) $offer->minimum_spend) {
                 $reason = 'Minimum spend not met';
-            } elseif ($voucher->maximum_spend && $subtotal > (float) $voucher->getRawOriginal('maximum_spend')) {
+            } elseif ($offer->maximum_spend !== null && $subtotal > (float) $offer->maximum_spend) {
                 $reason = 'Booking exceeds the maximum spend';
-            } elseif ($voucher->usageLimitReached()) {
+            } elseif ($offer->usageLimitReached()) {
                 $reason = 'Discount usage limit reached';
             }
-            if ($customerId && $voucher->per_customer_limit) {
-                $redemptions = DB::table('flight_offer_redemptions')->where('voucher_id', $voucher->id)->where('user_id', $customerId)->count();
-                if ($redemptions >= (int) $voucher->per_customer_limit) $reason = 'You have already used this discount';
-            }
+            if ($this->customerLimitReached($offer, $quote->user_id)) $reason = 'You have already used this discount';
 
-            $discount = $this->calculateDiscount($voucher, $subtotal);
+            $discount = $offer->discountOn($subtotal);
             $options[] = [
-                'id' => $voucher->id,
-                'name' => $voucher->name,
-                'description' => $voucher->description,
-                'value_text' => $voucher->getValueText(),
+                'id' => $offer->id,
+                'name' => $offer->localized('name'),
+                'description' => $offer->localized('description'),
+                'value_text' => $offer->valueText(),
                 'discount' => $discount,
                 'eligible' => $reason === null && $discount > 0,
                 'reason' => $reason ?? ($discount > 0 ? null : 'Discount does not apply to this fare'),
@@ -124,60 +119,64 @@ class FlightOfferService
     public function validateDiscount(FlightFareQuote|string $quoteIdentifier, int $discountId): array
     {
         $quote = $quoteIdentifier instanceof FlightFareQuote ? $quoteIdentifier : $this->quote($quoteIdentifier);
-        $voucher = $this->flightVouchers($quote->tenant_id)->whereKey($discountId)->first();
-        if (! $voucher || !(bool) data_get($voucher->meta, 'flight_auto_apply', false)) {
+        $offer = $this->discounts($quote->tenant_id)->whereKey($discountId)->first();
+        if (! $offer) {
             throw new DomainException('This flight discount is unavailable.');
         }
-        if (! $this->matchesFlightConditions($voucher, $quote)) {
+        if (! $this->matchesFlightConditions($offer, $quote)) {
             throw new DomainException('This discount is not valid for the selected flight or fare family.');
         }
 
         $subtotal = max(0, (float) $quote->customer_price);
-        if ($voucher->minimum_spend && $subtotal < (float) $voucher->getRawOriginal('minimum_spend')) {
+        if ($offer->minimum_spend !== null && $subtotal < (float) $offer->minimum_spend) {
             throw new DomainException('This discount requires a higher booking amount.');
         }
-        if ($voucher->maximum_spend && $subtotal > (float) $voucher->getRawOriginal('maximum_spend')) {
+        if ($offer->maximum_spend !== null && $subtotal > (float) $offer->maximum_spend) {
             throw new DomainException('This discount is not available for this booking amount.');
         }
-        if ($voucher->usageLimitReached()) {
+        if ($offer->usageLimitReached()) {
             throw new DomainException('This discount has reached its usage limit.');
         }
-        if ($quote->user_id && $voucher->per_customer_limit) {
-            $redemptions = DB::table('flight_offer_redemptions')->where('voucher_id', $voucher->id)->where('user_id', $quote->user_id)->count();
-            if ($redemptions >= (int) $voucher->per_customer_limit) {
-                throw new DomainException('You have already used this discount the maximum number of times.');
-            }
+        if ($this->customerLimitReached($offer, $quote->user_id)) {
+            throw new DomainException('You have already used this discount the maximum number of times.');
         }
 
-        $discount = $this->calculateDiscount($voucher, $subtotal);
+        $discount = $offer->discountOn($subtotal);
         if ($discount <= 0) throw new DomainException('This discount does not apply to this booking.');
 
         return [
-            'id' => $voucher->id,
-            'name' => $voucher->name,
+            'id' => $offer->id,
+            'name' => $offer->localized('name'),
             'discount' => $discount,
             'subtotal' => round($subtotal, 2),
             'payable' => round($subtotal - $discount, 2),
         ];
     }
 
-    public function redeemForBooking(\Modules\Flight\Models\FlightBooking $booking): void
+    public function redeemForBooking(FlightBooking $booking): void
     {
         $code = data_get($booking->meta, 'flight_offer.code');
         $automaticId = data_get($booking->meta, 'flight_automatic_discount.id');
-        $vouchers = collect();
-        if ($code) $vouchers->push(Voucher::query()->where('code', $code)->first());
-        if ($automaticId) $vouchers->push(Voucher::query()->find($automaticId));
+        // Offers are looked up in the booking's own tenant, even if disabled since.
+        $offers = collect();
+        if ($code) {
+            $offers->push(FlightCoupon::query()->forTenant($booking->tenant_id)
+                ->whereRaw('LOWER(code) = ?', [mb_strtolower(trim((string) $code))])->first());
+        }
+        if ($automaticId) {
+            $offers->push(FlightDiscount::query()->forTenant($booking->tenant_id)->find($automaticId));
+        }
 
-        foreach ($vouchers->filter() as $voucher) {
+        foreach ($offers->filter() as $offer) {
             $inserted = DB::table('flight_offer_redemptions')->insertOrIgnore([
-                'voucher_id' => $voucher->id,
+                'offer_type' => $offer->kind(),
+                'offer_id' => $offer->id,
                 'booking_id' => $booking->id,
                 'user_id' => $booking->user_id,
                 'created_at' => now(),
                 'updated_at' => now(),
             ]);
-            if ($inserted) $voucher->increment('used');
+            if ($inserted) $offer->increment('used');
         }
     }
 
@@ -191,28 +190,40 @@ class FlightOfferService
         return $quote;
     }
 
-    protected function flightVouchers(?int $tenantId)
+    protected function coupons(?int $tenantId): Builder
     {
-        return Voucher::query()->where('is_active', true)
-            ->whereJsonContains('conditions->channels', 'flights')
-            ->where(fn ($query) => $query->whereNull('start_date')->orWhereDate('start_date', '<=', today()))
-            ->where(fn ($query) => $query->whereNull('end_date')->orWhereDate('end_date', '>=', today()))
-            ->where(fn ($query) => $query->whereNull('meta->tenant_id')->orWhere('meta->tenant_id', $tenantId));
+        return FlightCoupon::query()->forTenant($tenantId)->availableNow();
     }
 
-    protected function calculateDiscount(Voucher $voucher, float $subtotal): float
+    protected function discounts(?int $tenantId): Builder
     {
-        $rawValue = (float) $voucher->getRawOriginal('value');
-        $discount = $voucher->type->value === 'percent' ? $subtotal * $rawValue / 100 : $rawValue;
-        if ($voucher->type->value === 'percent' && $voucher->getRawOriginal('max_discount')) {
-            $discount = min($discount, (float) $voucher->getRawOriginal('max_discount'));
-        }
-        return round(min($subtotal, max(0, $discount)), 2);
+        return FlightDiscount::query()->forTenant($tenantId)->availableNow();
     }
 
-    protected function matchesFlightConditions(Voucher $voucher, FlightFareQuote $quote): bool
+    protected function findCoupon(?int $tenantId, string $code): ?FlightCoupon
     {
-        $conditions = (array) ($voucher->conditions ?? []);
+        $code = mb_strtolower(trim($code));
+        if ($code === '') return null;
+
+        return $this->coupons($tenantId)->whereRaw('LOWER(code) = ?', [$code])->first();
+    }
+
+    protected function customerLimitReached(FlightOffer $offer, ?int $customerId): bool
+    {
+        if (! $customerId || ! $offer->per_customer_limit) return false;
+
+        $redemptions = DB::table('flight_offer_redemptions')
+            ->where('offer_type', $offer->kind())
+            ->where('offer_id', $offer->id)
+            ->where('user_id', $customerId)
+            ->count();
+
+        return $redemptions >= (int) $offer->per_customer_limit;
+    }
+
+    protected function matchesFlightConditions(FlightOffer $offer, FlightFareQuote $quote): bool
+    {
+        $conditions = (array) ($offer->conditions ?? []);
         $quote->loadMissing([
             'flightInventory.airline',
             'flightInventory.originAirport',

@@ -28,9 +28,10 @@ use Modules\User\Models\Role;
 
 class WhatsAppMessageController extends Controller
 {
-    public function integrationStatus(WhatsAppIntegrationService $service): JsonResponse
+    public function integrationStatus(Request $request, WhatsAppIntegrationService $service): JsonResponse
     {
-        return ApiResponse::success($service->status());
+        // ?domain=flight: a flight agency uses WhatsApp for login OTPs only.
+        return ApiResponse::success($service->status($request->query('domain') === 'flight'));
     }
 
     public function testNexMsg(Request $request, WhatsAppProviderFactory $factory): JsonResponse

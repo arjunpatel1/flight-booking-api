@@ -3,6 +3,7 @@
 namespace Modules\Flight\Services\Notification\Templates;
 
 use Illuminate\Support\Str;
+use Modules\Flight\Services\Branding\FlightTenantBrand;
 
 class FlightNotificationTemplateManager
 {
@@ -58,9 +59,30 @@ class FlightNotificationTemplateManager
     }
 
     /**
-     * Render subject, plain text message, and HTML message for given template.
+     * In HTML rendered for a tenant with an uploaded logo, the logo's src.
+     * The email channel replaces it with the inline (CID) attachment.
      */
-    public function render(string $template, array $rawPayload): array
+    public const LOGO_PLACEHOLDER = '__FLIGHT_BRAND_LOGO__';
+
+    /** The tenant whose brand the template being rendered uses. */
+    protected ?int $brandTenantId = null;
+
+    /**
+     * Render subject, plain text message, and HTML message for given template,
+     * branded for the booking's tenant when one is given.
+     */
+    public function render(string $template, array $rawPayload, ?int $tenantId = null): array
+    {
+        $this->brandTenantId = $tenantId;
+
+        try {
+            return $this->renderTemplate($template, $rawPayload);
+        } finally {
+            $this->brandTenantId = null;
+        }
+    }
+
+    protected function renderTemplate(string $template, array $rawPayload): array
     {
         $data = $this->sanitizeData($rawPayload);
 
@@ -194,6 +216,62 @@ class FlightNotificationTemplateManager
                 ];
                 break;
 
+            // We could not secure the seat: booking cancelled with a full refund.
+            case 'booking_sold_out':
+                $subject = "Sorry, Flight Sold Out: {$bookingRef} | {$flightNumber} ({$origin} → {$destination})";
+                $text = "Dear {$paxName}, we are sorry: {$reason} Your booking {$bookingRef} has been cancelled and the full amount of {$currency} {$refundAmount} is being refunded to your original payment method. Please search again to book another flight.";
+                $headline = "Flight Sold Out — Full Refund";
+                $details = [
+                    'Booking Reference' => $bookingRef,
+                    'Flight'            => $flightNumber,
+                    'Route'             => "{$origin} → {$destination}",
+                    'Departure'         => $departure ?: 'As per itinerary',
+                    'Full Refund'       => "{$currency} {$refundAmount}",
+                ];
+                break;
+
+            // Sent to the business when a customer has booked and paid.
+            case 'owner_booking_alert':
+                $customer = $data['customer_name'] ?? $paxName;
+                $passengers = (int) ($data['passenger_count'] ?? 1);
+                $subject = "New Booking: {$bookingRef} by {$customer} | {$flightNumber} ({$origin} → {$destination})";
+                $text = "{$customer} has booked and paid for {$passengers} passenger" . ($passengers === 1 ? '' : 's') . " on flight {$flightNumber} ({$origin} to {$destination}).";
+                $headline = "New Booking Received";
+                $details = [
+                    'Booking Reference' => $bookingRef,
+                    'Customer'          => $customer,
+                    'Email'             => $data['customer_email'] ?? '—',
+                    'Phone'             => $data['customer_phone'] ?? '—',
+                    'Passengers'        => (string) $passengers,
+                    'Flight'            => $flightNumber,
+                    'Route'             => "{$origin} → {$destination}",
+                    'Departure'         => $departure ?: 'As per itinerary',
+                    'Amount Paid'       => "{$currency} {$amount}",
+                    'Status'            => ($data['status'] ?? '') ?: 'Paid',
+                ];
+                break;
+
+            // Sent to the business when a customer asks for extra baggage,
+            // which the agent quotes and collects offline.
+            case 'owner_extra_baggage_request':
+                $customer = $data['customer_name'] ?? $paxName;
+                $baggage = (string) ($data['extra_baggage'] ?? '');
+                $subject = "Extra Baggage Request: {$bookingRef} | {$flightNumber} ({$origin} → {$destination})";
+                $text = "{$customer} has asked for extra baggage ({$baggage}) on booking {$bookingRef}. Please contact the customer to confirm the charge and collect it offline.";
+                $headline = "Extra Baggage Request";
+                $details = [
+                    'Booking Reference' => $bookingRef,
+                    'Customer'          => $customer,
+                    'Phone'             => $data['customer_phone'] ?? '—',
+                    'Email'             => $data['customer_email'] ?? '—',
+                    'Flight'            => $flightNumber,
+                    'Route'             => "{$origin} → {$destination}",
+                    'Departure'         => $departure ?: 'As per itinerary',
+                    'Extra Baggage'     => $baggage,
+                    'Payment'           => 'Collect offline',
+                ];
+                break;
+
             case 'refund_initiated':
             case 'refund_completed':
                 $subject = "Refund {$template}: {$currency} {$refundAmount} for Booking {$bookingRef}";
@@ -265,7 +343,7 @@ class FlightNotificationTemplateManager
      */
     protected function renderHtmlLayout(string $subject, string $headline, string $text, array $details): string
     {
-        $brand = $this->brand();
+        $brand = $this->brand($this->brandTenantId);
         $color = $brand['color'];
         $name = e($brand['name']);
 
@@ -274,8 +352,11 @@ class FlightNotificationTemplateManager
             $rowsHtml .= "<tr><td style=\"padding:9px 0;color:#64748b;font-size:13px;font-weight:600;width:42%;border-bottom:1px solid #eef2f7;\">{$label}</td><td style=\"padding:9px 0;color:#0f172a;font-size:14px;font-weight:700;border-bottom:1px solid #eef2f7;\">{$val}</td></tr>";
         }
 
-        $logo = $brand['logo_url'] !== ''
-            ? '<img src="' . e($brand['logo_url']) . '" width="52" height="52" alt="' . $name . '" style="display:block;width:52px;height:52px;border-radius:50%;object-fit:cover;background:#ffffff;">'
+        // The tenant's uploaded logo (attached inline by the email channel),
+        // else the configured https logo, else the brand initial.
+        $logoSrc = $brand['logo_path'] !== '' ? self::LOGO_PLACEHOLDER : $brand['logo_url'];
+        $logo = $logoSrc !== ''
+            ? '<img src="' . e($logoSrc) . '" width="52" height="52" alt="' . $name . '" style="display:block;width:52px;height:52px;border-radius:50%;object-fit:cover;background:#ffffff;">'
             : '<div style="width:52px;height:52px;line-height:52px;text-align:center;border-radius:50%;background:' . $color . ';color:#ffffff;font-size:22px;font-weight:800;">' . e(mb_strtoupper(mb_substr($brand['name'], 0, 1))) . '</div>';
 
         $button = $brand['bookings_url'] !== ''
@@ -340,10 +421,14 @@ HTML;
      * Brand used in customer emails (config flight.mail_brand). Links and the
      * logo are only used when they are absolute http(s) URLs.
      *
-     * @return array{name: string, color: string, logo_url: string, bookings_url: string, support_email: string, support_phone: string}
+     * logo_path is the file of the logo the tenant uploaded in System
+     * Settings → Logo; when set it is used instead of logo_url.
+     *
+     * @return array{name: string, color: string, logo_url: string, logo_path: string, bookings_url: string, support_email: string, support_phone: string}
      */
-    public function brand(): array
+    public function brand(?int $tenantId = null): array
     {
+        $tenantLogo = app(FlightTenantBrand::class)->logo($tenantId);
         $config = (array) config('flight.mail_brand', []);
         $website = rtrim(trim((string) ($config['website_url'] ?? '')), '/');
         $website = preg_match('~^https?://~i', $website) ? $website : '';
@@ -356,6 +441,7 @@ HTML;
             'color' => preg_match('/^#[0-9a-f]{6}$/i', $color) ? $color : '#F57C00',
             // Mail clients block plain-http and localhost images; fall back to an initial badge.
             'logo_url' => str_starts_with(strtolower($logo), 'https://') ? $logo : '',
+            'logo_path' => $tenantLogo['path'] ?? '',
             'bookings_url' => $website !== '' ? $website . '/customer/bookings' : '',
             'support_email' => filter_var($supportEmail, FILTER_VALIDATE_EMAIL) ? $supportEmail : '',
             'support_phone' => trim((string) ($config['support_phone'] ?? '')),

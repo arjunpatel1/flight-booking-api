@@ -6,6 +6,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Modules\Core\Http\Controllers\Controller;
+use Modules\Flight\Services\Booking\FlightPnrAllocationService;
 use Modules\Flight\Services\Servicing\FlightRefundPolicyService;
 use Modules\Saas\Models\Tenant;
 use Modules\Support\ApiResponse;
@@ -26,31 +27,56 @@ class FlightBookingSettingsController extends Controller
     {
         $tenant = $this->tenantFor($request);
 
-        return ApiResponse::success([
-            'minimum_advance_booking_days' => (int) data_get(
-                $tenant->settings,
-                'flight_booking.minimum_advance_booking_days',
-                0
-            ),
-        ]);
+        return ApiResponse::success($this->bookingSettings($tenant));
     }
 
     public function update(Request $request): JsonResponse
     {
         $data = $request->validate([
             'minimum_advance_booking_days' => ['required', 'integer', 'min:0', 'max:365'],
+            // Optional so older admin screens that only send the booking window keep saving.
+            'pnr_confirmation_timeout_minutes' => ['sometimes', 'integer', 'min:0', 'max:10080'],
+            'booking_alert_emails' => ['sometimes', 'array', 'max:10'],
+            'booking_alert_emails.*' => ['email', 'max:190'],
+            // Owner WhatsApp numbers (with country code) for alerts such as
+            // extra baggage requests.
+            'booking_alert_whatsapp_numbers' => ['sometimes', 'array', 'max:5'],
+            'booking_alert_whatsapp_numbers.*' => ['string', 'regex:/^\+?[0-9 ()-]{10,20}$/'],
         ]);
 
         $tenant = $this->tenantFor($request);
         $settings = (array) ($tenant->settings ?? []);
         $flightSettings = (array) ($settings['flight_booking'] ?? []);
         $flightSettings['minimum_advance_booking_days'] = (int) $data['minimum_advance_booking_days'];
+        if (array_key_exists('pnr_confirmation_timeout_minutes', $data)) {
+            $flightSettings['pnr_confirmation_timeout_minutes'] = (int) $data['pnr_confirmation_timeout_minutes'];
+        }
+        if (array_key_exists('booking_alert_emails', $data)) {
+            $flightSettings['booking_alert_emails'] = array_values(array_unique(array_map(
+                fn ($email) => strtolower(trim((string) $email)),
+                $data['booking_alert_emails'],
+            )));
+        }
+        if (array_key_exists('booking_alert_whatsapp_numbers', $data)) {
+            $flightSettings['booking_alert_whatsapp_numbers'] = array_values(array_unique(array_filter(array_map(
+                fn ($number) => preg_replace('/\D+/', '', (string) $number),
+                $data['booking_alert_whatsapp_numbers'],
+            ))));
+        }
         $settings['flight_booking'] = $flightSettings;
         $tenant->forceFill(['settings' => $settings])->save();
 
-        return ApiResponse::updated([
-            'minimum_advance_booking_days' => $flightSettings['minimum_advance_booking_days'],
-        ], 'Flight booking settings saved.');
+        return ApiResponse::updated($this->bookingSettings($tenant->fresh()), 'Flight booking settings saved.');
+    }
+
+    private function bookingSettings(Tenant $tenant): array
+    {
+        return [
+            'minimum_advance_booking_days' => (int) data_get($tenant->settings, 'flight_booking.minimum_advance_booking_days', 0),
+            'pnr_confirmation_timeout_minutes' => FlightPnrAllocationService::timeoutMinutes($tenant),
+            'booking_alert_emails' => array_values((array) data_get($tenant->settings, 'flight_booking.booking_alert_emails', [])),
+            'booking_alert_whatsapp_numbers' => array_values((array) data_get($tenant->settings, 'flight_booking.booking_alert_whatsapp_numbers', [])),
+        ];
     }
 
     /** Tenant cancellation & refund policy (defaults until the tenant saves its own). */
@@ -63,6 +89,18 @@ class FlightBookingSettingsController extends Controller
             'defaults' => $policies->normalize(FlightRefundPolicyService::DEFAULT_POLICY),
             'is_customised' => data_get($tenant->settings, 'flight_booking.refund_policy') !== null,
         ]);
+    }
+
+    /**
+     * Customer-facing copy of the policy for the results page's "Fare Summary &
+     * Rules" tab. Read-only; the tenant comes from the storefront domain like
+     * the public configuration endpoint.
+     */
+    public function showPublicRefundPolicy(Request $request, FlightRefundPolicyService $policies): JsonResponse
+    {
+        $tenant = $this->tenantForRead($request);
+
+        return ApiResponse::success(['policy' => $policies->policyFor($tenant)]);
     }
 
     public function updateRefundPolicy(Request $request, FlightRefundPolicyService $policies): JsonResponse

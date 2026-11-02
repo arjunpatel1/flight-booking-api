@@ -64,6 +64,22 @@ class FlightServicingService
         return $this->refundPolicy->quote($booking, $policy, $fareRefundable, $fareRuleFee);
     }
 
+    /** Everything paid comes back: no cancellation charge, service or convenience fee. */
+    private function fullRefundQuote(FlightBooking $booking): array
+    {
+        $total = round((float) $booking->total_amount, 2);
+
+        return [
+            'cancellation_fee' => 0.0,
+            'refundable_amount' => $total,
+            'applied_rule' => 'Seat could not be confirmed: full refund.',
+            'breakdown' => [
+                ['label' => 'Amount paid', 'amount' => $total],
+                ['label' => 'Refund amount', 'amount' => $total],
+            ],
+        ];
+    }
+
     // =========================================================================
     // 2. EXECUTE CANCELLATION & REFUND
     // =========================================================================
@@ -75,9 +91,12 @@ class FlightServicingService
     public function cancelBooking(
         FlightBooking $booking,
         string $reason = 'Customer cancellation',
-        string $actor = 'agent'
+        string $actor = 'agent',
+        // We could not secure the seat (sold out / PNR never confirmed): the
+        // customer is not at fault, so refund everything they paid.
+        bool $fullRefund = false
     ): array {
-        $result = DB::transaction(function () use ($booking, $reason, $actor) {
+        $result = DB::transaction(function () use ($booking, $reason, $actor, $fullRefund) {
             // 1. Lock booking
             $booking = FlightBooking::where('id', $booking->id)->lockForUpdate()->firstOrFail();
 
@@ -102,7 +121,7 @@ class FlightServicingService
             }
 
             // 2. Authoritative Quote
-            $quote = $this->quoteCancellation($booking);
+            $quote = $fullRefund ? $this->fullRefundQuote($booking) : $this->quoteCancellation($booking);
             $cancellationFee = $quote['cancellation_fee'];
             $refundableAmount = $quote['refundable_amount'];
 
@@ -479,7 +498,9 @@ class FlightServicingService
             ];
         }
 
-        $rescheduleFee = 750.00;
+        // Tenant's Cancellation & Refund Policy sets the fee; a fare rule can override it.
+        $tenant = $booking->tenant_id ? Tenant::query()->withoutGlobalScopes()->find($booking->tenant_id) : null;
+        $rescheduleFee = (float) $this->refundPolicy->policyFor($tenant)['reschedule_fee'];
         if ($fare && $fare->fareRule && ! empty($fare->fareRule->rule_details['reschedule_fee'])) {
             $rescheduleFee = (float) $fare->fareRule->rule_details['reschedule_fee'];
         }

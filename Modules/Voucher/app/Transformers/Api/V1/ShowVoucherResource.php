@@ -17,6 +17,9 @@ class ShowVoucherResource extends JsonResource
     {
         return [
             ...(new VoucherResource($this))->resolve(),
+            // The edit form needs the saved description (same shape as `name`);
+            // without it the form showed it empty while customers still saw it.
+            "description" => $this->description,
             "value" => $this->value,
             "minimum_spend" => $this->minimum_spend,
             "maximum_spend" => $this->maximum_spend,

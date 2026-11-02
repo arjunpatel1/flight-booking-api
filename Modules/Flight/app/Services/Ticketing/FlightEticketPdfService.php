@@ -5,6 +5,7 @@ namespace Modules\Flight\Services\Ticketing;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Modules\Flight\Models\FlightBooking;
+use Modules\Flight\Services\Branding\FlightTenantBrand;
 use Modules\Saas\Models\Tenant;
 use Throwable;
 
@@ -67,6 +68,31 @@ class FlightEticketPdfService
             fn (string $line): string => '<p>' . htmlspecialchars($line, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</p>',
             $advisoryLines
         ));
+        // The logo the agency uploaded in System Settings → Logo; the built-in
+        // CRT Travels mark only when none is uploaded.
+        $brandLogo = app(FlightTenantBrand::class)->logoDataUri($booking->tenant_id ? (int) $booking->tenant_id : null);
+        if ($brandLogo) {
+            $brandLogoPage1 = '<img src="' . $brandLogo . '" alt="Logo" style="height:56px;width:56px;object-fit:contain;border-radius:50%;">';
+            $brandLogoPage2 = '<img src="' . $brandLogo . '" alt="Logo" style="height:44px;width:44px;object-fit:contain;border-radius:50%;">';
+        } else {
+            $brandLogoPage1 = <<<'SVG'
+<svg width="220" height="46" viewBox="0 0 220 46" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="22" cy="23" r="19" fill="#0284c7" />
+    <circle cx="22" cy="23" r="15" fill="#0369a1" />
+    <path d="M11 26L20 18L29 20L25 24L33 27L30 29L24 26L20 30L17 29L19 26L11 26Z" fill="#ffffff" />
+    <text x="50" y="22" font-family="'Segoe UI', Arial, sans-serif" font-size="18" font-weight="900" fill="#0369a1" letter-spacing="0.5">CRT Travels</text>
+    <text x="50" y="36" font-family="'Segoe UI', Arial, sans-serif" font-size="9.5" font-weight="600" fill="#64748b" letter-spacing="0.5">Flight Booking Platform</text>
+</svg>
+SVG;
+            $brandLogoPage2 = <<<'SVG'
+<svg width="180" height="38" viewBox="0 0 220 46" fill="none">
+    <circle cx="22" cy="23" r="19" fill="#0284c7" />
+    <circle cx="22" cy="23" r="15" fill="#0369a1" />
+    <path d="M11 26L20 18L29 20L25 24L33 27L30 29L24 26L20 30L17 29L19 26L11 26Z" fill="#ffffff" />
+    <text x="50" y="24" font-family="'Segoe UI', Arial, sans-serif" font-size="19" font-weight="900" fill="#0369a1">CRT Travels</text>
+</svg>
+SVG;
+        }
         $itinerary = $booking->itinerary ?? [];
         if (is_string($itinerary)) {
             $itinerary = json_decode($itinerary, true) ?? [];
@@ -506,13 +532,7 @@ class FlightEticketPdfService
         <!-- Top Branding Header -->
         <div class="header-top">
             <div class="crt-logo-wrap">
-                <svg width="220" height="46" viewBox="0 0 220 46" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <circle cx="22" cy="23" r="19" fill="#0284c7" />
-                    <circle cx="22" cy="23" r="15" fill="#0369a1" />
-                    <path d="M11 26L20 18L29 20L25 24L33 27L30 29L24 26L20 30L17 29L19 26L11 26Z" fill="#ffffff" />
-                    <text x="50" y="22" font-family="'Segoe UI', Arial, sans-serif" font-size="18" font-weight="900" fill="#0369a1" letter-spacing="0.5">CRT Travels</text>
-                    <text x="50" y="36" font-family="'Segoe UI', Arial, sans-serif" font-size="9.5" font-weight="600" fill="#64748b" letter-spacing="0.5">Flight Booking Platform</text>
-                </svg>
+                {$brandLogoPage1}
             </div>
             <div class="alliance-header">
                 <div class="alliance-title">ELECTRONIC TICKET RECEIPT</div>
@@ -706,12 +726,7 @@ class FlightEticketPdfService
         <!-- Top Page 2 Header -->
         <div class="header-top">
             <div class="crt-logo-wrap">
-                <svg width="180" height="38" viewBox="0 0 220 46" fill="none">
-                    <circle cx="22" cy="23" r="19" fill="#0284c7" />
-                    <circle cx="22" cy="23" r="15" fill="#0369a1" />
-                    <path d="M11 26L20 18L29 20L25 24L33 27L30 29L24 26L20 30L17 29L19 26L11 26Z" fill="#ffffff" />
-                    <text x="50" y="24" font-family="'Segoe UI', Arial, sans-serif" font-size="19" font-weight="900" fill="#0369a1">CRT Travels</text>
-                </svg>
+                {$brandLogoPage2}
             </div>
             <div class="alliance-header">
                 <div class="alliance-title">TRAVEL REGULATIONS & NOTES</div>

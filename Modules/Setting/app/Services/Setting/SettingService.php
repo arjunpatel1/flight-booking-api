@@ -68,6 +68,17 @@ class SettingService implements SettingServiceInterface
         // provisioning-time URL. Otherwise the old tenant URL permanently
         // masks a newly uploaded logo and the UI falls back inconsistently.
         $resolvedLogo = $globalLogo ?: (filled($tenantLogo) ? $tenantLogo : asset('logo.svg'));
+        $loaderLogo = Media::getCacheMedia(setting('loader_logo'))?->url ?: null;
+        $favicon = Media::getCacheMedia(setting('favicon'))?->url ?: $resolvedLogo;
+
+        // Visitors who are not signed in and not on an agency's own domain
+        // (the public flight site, the login page) see the logos of the
+        // agency set in FLIGHT_PUBLIC_BRAND_TENANT_ID instead of the platform logo.
+        if ($brand = $this->publicBrandLogos()) {
+            $resolvedLogo = $brand['logo'] ?: $resolvedLogo;
+            $loaderLogo = $brand['loader_logo'] ?: $loaderLogo;
+            $favicon = $brand['favicon'] ?: $brand['logo'] ?: $favicon;
+        }
 
         $settings = [
             'supported_locales' => supportedLocaleKeys(),
@@ -82,10 +93,10 @@ class SettingService implements SettingServiceInterface
             'demo_accounts' => $this->getDemoAccounts(),
             'appearance' => $this->appearanceService->resolve(setting()->all()),
             'logo' => $resolvedLogo,
-            'loader_logo' => Media::getCacheMedia(setting('loader_logo'))?->url ?: null,
+            'loader_logo' => $loaderLogo,
             'logo_data_base64' => null,
             'loader_logo_data_base64' => null,
-            'favicon' => Media::getCacheMedia(setting('favicon'))?->url ?: $resolvedLogo,
+            'favicon' => $favicon,
             'waiter_table_status_flow_enabled' => (bool) setting('waiter_table_status_flow_enabled', true),
         ];
 
@@ -94,6 +105,35 @@ class SettingService implements SettingServiceInterface
         }
 
         return $settings;
+    }
+
+    /**
+     * Logo, loader logo and favicon URLs of the public brand agency, for a
+     * visitor with no tenant: not signed in and not on an agency domain.
+     * Null when no brand agency is configured or a tenant is already known.
+     *
+     * @return array{logo: ?string, loader_logo: ?string, favicon: ?string}|null
+     */
+    private function publicBrandLogos(): ?array
+    {
+        $tenantId = (int) config('flight.public_brand_tenant_id');
+        $context = app(\Modules\Saas\Support\TenantContext::class);
+        if ($tenantId <= 0 || $context->id() || auth()->check()) {
+            return null;
+        }
+
+        $context->setId($tenantId);
+        $this->refreshSettingBinding();
+        try {
+            return [
+                'logo' => Media::getCacheMedia(setting('logo'))?->url ?: null,
+                'loader_logo' => Media::getCacheMedia(setting('loader_logo'))?->url ?: null,
+                'favicon' => Media::getCacheMedia(setting('favicon'))?->url ?: null,
+            ];
+        } finally {
+            $context->setId(null);
+            $this->refreshSettingBinding();
+        }
     }
 
     private function getDemoAccounts(): array

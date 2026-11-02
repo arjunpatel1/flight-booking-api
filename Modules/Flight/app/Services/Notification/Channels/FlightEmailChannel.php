@@ -30,19 +30,26 @@ class FlightEmailChannel implements FlightNotificationChannelInterface
             ];
         }
 
-        $rendered = $this->templateManager->render($template, $data);
+        $tenantId = $booking?->tenant_id ? (int) $booking->tenant_id : null;
+        $rendered = $this->templateManager->render($template, $data, $tenantId);
         $subject = $rendered['subject'];
         $html = $rendered['html'];
         $messageId = 'EMAIL-' . strtoupper(Str::random(12));
-        $fromName = $this->templateManager->brand()['name'];
+        $brand = $this->templateManager->brand($tenantId);
+        $fromName = $brand['name'];
         $ticket = $this->eticketAttachment($template, $booking);
 
         try {
             // The booking agency's own mail server when connected, else the platform mailer.
             $own = $booking?->tenant_id ? app(TenantMailerService::class)->resolve((int) $booking->tenant_id) : null;
 
-            ($own['mailer'] ?? Mail::mailer())->html($html, function ($message) use ($recipient, $subject, $fromName, $ticket, $own) {
+            ($own['mailer'] ?? Mail::mailer())->html($html, function ($message) use ($recipient, $subject, $fromName, $ticket, $own, $html, $brand) {
                 $message->to($recipient)->subject($subject);
+                // The agency's uploaded logo travels inside the email (CID), so
+                // it shows without a public https URL.
+                if (str_contains($html, FlightNotificationTemplateManager::LOGO_PLACEHOLDER)) {
+                    $message->html(str_replace(FlightNotificationTemplateManager::LOGO_PLACEHOLDER, $message->embed($brand['logo_path']), $html));
+                }
                 // MAIL_FROM_NAME may be unset or a placeholder; show the brand.
                 if ($own) {
                     $message->from($own['from_address'], $own['from_name'] ?: $fromName);

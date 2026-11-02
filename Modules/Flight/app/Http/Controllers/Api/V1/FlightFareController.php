@@ -22,6 +22,31 @@ class FlightFareController extends Controller
     ) {}
 
     /** Resolve a displayed customer fare to the saved fare and inventory IDs. */
+    /**
+     * The fare in $fares that belongs to $familyCode, strongest match first.
+     * Family names are shared (several "CRT" families), so a name only counts
+     * when it is unique; a family code that merely starts the same (CRT vs
+     * CRT FAMILY) never counts.
+     *
+     * @param  \Illuminate\Support\Collection<int, FlightFare>  $fares
+     */
+    private function fareForFamily($fares, string $familyCode): ?FlightFare
+    {
+        $normalize = fn ($code) => preg_replace('/[^A-Z0-9]/', '', strtoupper(trim((string) $code)));
+        $target = $normalize($familyCode);
+        $unique = fn ($matches) => $matches->count() === 1 ? $matches->first() : null;
+
+        return $fares->first(fn (FlightFare $fare) => strtoupper(trim((string) $fare->fare_family_code)) === $familyCode)
+            ?? $fares->first(fn (FlightFare $fare) => strtoupper(trim((string) $fare->fareFamily?->code)) === $familyCode)
+            ?? $unique($fares->filter(fn (FlightFare $fare) => $target !== '' && in_array($target, [
+                $normalize($fare->fare_family_code),
+                $normalize($fare->fareFamily?->code),
+            ], true)))
+            ?? $unique($fares->filter(fn (FlightFare $fare) => $target !== '' && $normalize($fare->fareFamily?->name) === $target))
+            // Legacy fares saved without any family: the only one on the flight is it.
+            ?? $unique($fares->filter(fn (FlightFare $fare) => blank($fare->fare_family_code) && ! $fare->fare_family_id));
+    }
+
     public function resolveBookingOption(Request $request): JsonResponse
     {
         $data = $request->validate([
@@ -40,10 +65,10 @@ class FlightFareController extends Controller
         $cabinClass = strtoupper(trim($data['cabin_class']));
         $familyCode = strtoupper(trim($data['fare_family_code']));
 
-        $fares = FlightFare::query()
+        $faresFor = fn (?string $cabin) => FlightFare::query()
             ->with(['inventory', 'fareFamily'])
             ->where('status', 'active')
-            ->where('cabin_class', $cabinClass)
+            ->when($cabin !== null, fn ($query) => $query->where('cabin_class', $cabin))
             ->whereHas('inventory', function ($inventory) use ($flightNumber, $originCode, $destinationCode, $departureTime): void {
                 $inventory->where('flight_number', $flightNumber)
                     ->where('status', 'active');
@@ -62,43 +87,12 @@ class FlightFareController extends Controller
             })
             ->get();
 
-        $fare = $fares->first(function (FlightFare $candidate) use ($familyCode): bool {
-            $codes = [
-                $candidate->fare_family_code,
-                $candidate->fareFamily?->code,
-                $candidate->fareFamily?->name,
-            ];
-
-            return collect($codes)->contains(fn ($code) => strtoupper(trim((string) $code)) === $familyCode);
-        });
-        if (! $fare) {
-            $normalizeCode = fn ($code) => preg_replace('/[^A-Z0-9]/', '', strtoupper(trim((string) $code)));
-            $normalizedFamilyCode = $normalizeCode($familyCode);
-            $normalizedMatches = $fares->filter(function (FlightFare $candidate) use ($normalizeCode, $normalizedFamilyCode): bool {
-                return collect([
-                    $candidate->fare_family_code,
-                    $candidate->fareFamily?->code,
-                    $candidate->fareFamily?->name,
-                ])->contains(fn ($code) => $normalizeCode($code) === $normalizedFamilyCode);
-            });
-            if ($normalizedMatches->count() === 1) {
-                $fare = $normalizedMatches->first();
-            }
-        }
-        if (! $fare) {
-            $normalizeCode = fn ($code) => preg_replace('/[^A-Z0-9]/', '', strtoupper(trim((string) $code)));
-            $normalizedFamilyCode = $normalizeCode($familyCode);
-            $prefixMatches = $fares->filter(fn (FlightFare $candidate) => str_starts_with(
-                $normalizeCode($candidate->fare_family_code),
-                $normalizedFamilyCode,
-            ));
-            if ($prefixMatches->count() === 1) {
-                $fare = $prefixMatches->first();
-            }
-        }
-        if (! $fare && $fares->count() === 1) {
-            $fare = $fares->first();
-        }
+        // Only ever return the requested fare family's own fare. Each family has
+        // its own cabin, so when the caller's cabin is wrong, look in the flight's
+        // other cabins for that same family instead of handing back another
+        // family's (differently priced) fare.
+        $fare = $this->fareForFamily($faresFor($cabinClass), $familyCode)
+            ?? $this->fareForFamily($faresFor(null), $familyCode);
 
         if (! $fare || ! $fare->inventory) {
             return ApiResponse::errors(

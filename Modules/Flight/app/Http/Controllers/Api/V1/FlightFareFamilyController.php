@@ -17,11 +17,18 @@ class FlightFareFamilyController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
+        // Public read: identify the storefront tenant the same way the public
+        // flight configuration endpoint does, so a tenant's own fare families
+        // (and their cabins) reach the customer booking page, not just the
+        // global ones.
         $tenantId = $request->user()?->tenant_id
             ?? $request->attributes->get('tenant_id')
-            ?? $request->attributes->get('tenant')?->id;
+            ?? $request->attributes->get('tenant')?->id
+            ?? $request->header('X-Tenant-ID')
+            ?? $request->query('tenant_id');
+        $tenantId = is_numeric($tenantId) && (int) $tenantId > 0 ? (int) $tenantId : null;
 
-        return $this->fareFamiliesResponse($request, $tenantId ? (int) $tenantId : null);
+        return $this->fareFamiliesResponse($request, $tenantId);
     }
 
     /** List fare families for the authenticated admin tenant, including global families. */

@@ -10,11 +10,14 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use Modules\Flight\Enums\AncillaryCategory;
 use Modules\Flight\Enums\BookingStatus;
 use Modules\Flight\Enums\HoldStatus;
 use Modules\Flight\Enums\PassengerType;
 use Modules\Flight\Enums\PaymentStatus;
+use Modules\Flight\Jobs\SendFlightExtraBaggageAlertJob;
 use Modules\Flight\Models\FlightBooking;
+use Modules\Flight\Models\FlightBookingAncillary;
 use Modules\Flight\Models\FlightBookingPassenger;
 use Modules\Flight\Models\FlightFareQuote;
 use Modules\Flight\Models\FlightHold;
@@ -254,7 +257,7 @@ class FlightBookingService
                 $typeStr = strtoupper($pax['passenger_type'] ?? 'ADULT');
                 $type = PassengerType::tryFrom($typeStr) ?? PassengerType::ADULT;
 
-                FlightBookingPassenger::create([
+                $passenger = FlightBookingPassenger::create([
                     'booking_id'            => $booking->id,
                     'tenant_id'             => $tenantId,
                     'passenger_type'        => $type,
@@ -275,6 +278,33 @@ class FlightBookingService
                     'contact_phone'         => $pax['contact_phone'] ?? null,
                     'meta'                  => $pax['meta'] ?? null,
                 ]);
+
+                // Extra baggage is not priced online: the agent quotes and
+                // collects it offline, so it is recorded as a request at ₹0.
+                $extraKg = (float) ($pax['extra_baggage_kg'] ?? 0);
+                if ($extraKg > 0) {
+                    $kgText = rtrim(rtrim(number_format($extraKg, 1, '.', ''), '0'), '.');
+                    FlightBookingAncillary::create([
+                        'tenant_id'    => $tenantId,
+                        'booking_id'   => $booking->id,
+                        'passenger_id' => $passenger->id,
+                        'category'     => AncillaryCategory::BAGGAGE,
+                        'code'         => 'BAG-OFFLINE-CUSTOM',
+                        'name'         => "Extra baggage +{$kgText} kg (pay agent offline)",
+                        'description'  => 'Requested by the customer; the agent confirms the charge and collects it offline.',
+                        'price'        => 0,
+                        'currency'     => $booking->currency ?: 'INR',
+                        'quantity'     => 1,
+                        'status'       => 'REQUESTED',
+                        'meta'         => ['extra_kg' => $extraKg, 'payment' => 'offline'],
+                    ]);
+                }
+            }
+
+            // Tell the owner once the booking is saved, so the agent can
+            // contact the customer and collect the baggage charge offline.
+            if (collect($passengersData)->contains(fn ($pax) => (float) ($pax['extra_baggage_kg'] ?? 0) > 0)) {
+                SendFlightExtraBaggageAlertJob::dispatch($booking->id)->afterCommit();
             }
 
             // Track coupon and automatic discount usage only after the booking
@@ -516,76 +546,9 @@ class FlightBookingService
         $quote->save();
     }
 
-    /** Assign a route-level PNR to already-paid bookings for that exact flight date. */
-    public function assignRoutePnr(FlightRoute $route): int
-    {
-        $pnr = strtoupper(trim((string) $route->pnr_number));
-        $departureDate = $route->flight_date?->toDateString();
-        if ($pnr === '' || ! $departureDate) {
-            return 0;
-        }
-
-        $inventoryIds = FlightInventory::query()
-            ->where('tenant_id', $route->tenant_id)
-            ->where('flight_number', $route->flight_number)
-            ->where('origin_airport_id', $route->origin_airport_id)
-            ->where('destination_airport_id', $route->destination_airport_id)
-            ->when($route->flight_time, fn (Builder $query) => $query->whereTime('departure_time', $route->flight_time))
-            ->pluck('id');
-
-        if ($inventoryIds->isEmpty()) {
-            return 0;
-        }
-
-        $bookings = FlightBooking::query()
-            ->where('tenant_id', $route->tenant_id)
-            ->whereIn('flight_inventory_id', $inventoryIds)
-            ->where('manual_pnr_required', true)
-            ->where('payment_status', PaymentStatus::PAID)
-            ->where('booking_status', BookingStatus::PNR_PENDING)
-            ->get();
-
-        $updated = 0;
-        foreach ($bookings as $booking) {
-            $itinerary = (array) ($booking->itinerary ?? []);
-            $bookingDate = data_get($itinerary, 'departure.date')
-                ?? data_get($itinerary, 'departure_date');
-            if (! $bookingDate || Carbon::parse($bookingDate)->toDateString() !== $departureDate) {
-                continue;
-            }
-
-            $this->assignPnr($booking->booking_reference, $pnr);
-            $booking->refresh();
-            try {
-                $this->ticketingService->issueTicket($booking);
-            } catch (\Throwable $exception) {
-                // Keep the administrator's PNR update even if ticket issuance
-                // needs a retry; do not roll the booking back to PNR_PENDING.
-                Log::warning('Automatic ticket issuance failed after route PNR assignment.', [
-                    'booking_reference' => $booking->booking_reference,
-                    'error' => $exception->getMessage(),
-                ]);
-                $booking->refresh()->update([
-                    'ticket_status' => \Modules\Flight\Enums\TicketStatus::FAILED,
-                    'ticketing_error' => $exception->getMessage(),
-                ]);
-            }
-            $updated++;
-        }
-
-        return $updated;
-    }
-
     private function resolveRoutePnr(FlightFareQuote $quote): ?string
     {
         if (! $quote->flight_inventory_id) {
-            return null;
-        }
-
-        $itinerary = (array) ($quote->selected_itinerary ?? []);
-        $departureDate = data_get($itinerary, 'departure.date')
-            ?? data_get($itinerary, 'departure_date');
-        if (! $departureDate) {
             return null;
         }
 
@@ -594,13 +557,27 @@ class FlightBookingService
             return null;
         }
 
+        // Quotes built from a hold may carry the date only inside the full
+        // departure datetime; the inventory's own datetime is the last resort.
+        $departureDate = FlightBooking::departureDateOf((array) ($quote->selected_itinerary ?? []))
+            ?? FlightBooking::departureDateOf(['departure_time' => (string) $inventory->departure_time]);
+        if (! $departureDate) {
+            return null;
+        }
+
+        // departure_time may be a full datetime: compare its time of day only.
+        // A route saved without a time matches any departure that day.
+        $departureClock = $inventory->departure_time ? Carbon::parse($inventory->departure_time)->format('H:i:s') : null;
+
         $route = FlightRoute::query()
             ->where('tenant_id', $quote->tenant_id)
             ->where('flight_number', $inventory->flight_number)
             ->where('origin_airport_id', $inventory->origin_airport_id)
             ->where('destination_airport_id', $inventory->destination_airport_id)
-            ->whereDate('flight_date', Carbon::parse($departureDate)->toDateString())
-            ->when($inventory->departure_time, fn (Builder $query) => $query->whereTime('flight_time', $inventory->departure_time))
+            ->whereDate('flight_date', $departureDate)
+            ->when($departureClock, fn (Builder $query) => $query->where(fn (Builder $time) => $time
+                ->whereNull('flight_time')
+                ->orWhereTime('flight_time', $departureClock)))
             ->first();
 
         return filled($route?->pnr_number) ? strtoupper(trim($route->pnr_number)) : null;

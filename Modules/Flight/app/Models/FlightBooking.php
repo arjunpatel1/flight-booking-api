@@ -21,6 +21,30 @@ class FlightBooking extends Model
 
     protected $table = 'flight_bookings';
 
+    /**
+     * Cancellation reasons starting with this mean we could not secure the seat
+     * (PNR went to other passengers, or never came in time): the customer gets a
+     * full refund and the "sold out" email instead of the normal cancellation one.
+     */
+    public const SOLD_OUT_REASON_PREFIX = 'Sold out: ';
+
+    /**
+     * 'Y-m-d' departure date of a quote/booking itinerary. Quotes built from a
+     * hold often leave departure.date empty and keep the date only inside the
+     * full departure datetime, so fall back to that.
+     */
+    public static function departureDateOf(array $itinerary): ?string
+    {
+        foreach (['departure.date', 'departure_date', 'departure.time', 'departure_time'] as $key) {
+            $value = trim((string) data_get($itinerary, $key));
+            if (preg_match('/^(\d{4}-\d{2}-\d{2})/', $value, $match)) {
+                return $match[1];
+            }
+        }
+
+        return null;
+    }
+
     protected $fillable = [
         'booking_reference',
         'pnr',

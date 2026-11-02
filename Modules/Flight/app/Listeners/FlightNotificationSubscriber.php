@@ -97,6 +97,147 @@ class FlightNotificationSubscriber
         } catch (Throwable $e) {
             Log::warning('Subscriber error on payment confirmed notification', ['error' => $e->getMessage()]);
         }
+
+        $this->notifyOwnerOfBooking($event->booking, (float) $event->payment->amount);
+    }
+
+    /** Tell the business that a customer has just booked and paid. */
+    protected function notifyOwnerOfBooking(FlightBooking $booking, float $amount): void
+    {
+        try {
+            $payload = array_merge($this->extractBookingPayload($booking), [
+                'amount'          => $amount,
+                'customer_name'   => $booking->contact_name,
+                'customer_email'  => $booking->contact_email,
+                'customer_phone'  => $booking->contact_phone,
+                'passenger_count' => max(1, (int) $booking->pax_count_adult + (int) $booking->pax_count_child + (int) $booking->pax_count_infant),
+                'status'          => $booking->booking_status?->label() ?? '',
+            ]);
+
+            foreach ($this->ownerAlertEmails($booking) as $email) {
+                $this->notificationService->dispatchNotification(
+                    event:      FlightNotificationEvent::OWNER_BOOKING_ALERT,
+                    recipients: ['email' => $email],
+                    template:   'owner_booking_alert',
+                    data:       $payload,
+                    booking:    $booking,
+                    channels:   ['email']
+                );
+            }
+        } catch (Throwable $e) {
+            Log::warning('Subscriber error on owner booking alert', ['error' => $e->getMessage()]);
+        }
+    }
+
+    /**
+     * Tell the business that a customer asked for extra baggage. The agent
+     * quotes and collects the charge offline, so the alert carries who to
+     * call and how much each passenger needs. Sent by SendFlightExtraBaggageAlertJob.
+     */
+    public function notifyOwnerOfExtraBaggage(FlightBooking $booking): void
+    {
+        $requests = $booking->ancillaries->where('code', 'BAG-OFFLINE-CUSTOM');
+        if ($requests->isEmpty()) {
+            return;
+        }
+
+        // "RAMA CHANDRA +10 kg, SITA DEVI +5 kg"
+        $baggage = $requests->map(function ($ancillary) {
+            $kg = rtrim(rtrim(number_format((float) data_get($ancillary->meta, 'extra_kg', 0), 1, '.', ''), '0'), '.');
+            $name = trim(($ancillary->passenger?->first_name ?? '') . ' ' . ($ancillary->passenger?->last_name ?? '')) ?: 'Passenger';
+
+            return "{$name} +{$kg} kg";
+        })->implode(', ');
+
+        $payload = array_merge($this->extractBookingPayload($booking), [
+            'customer_name'  => $booking->contact_name ?: 'Customer',
+            'customer_email' => $booking->contact_email,
+            'customer_phone' => $booking->contact_phone ?: '—',
+            'extra_baggage'  => $baggage,
+        ]);
+
+        try {
+            foreach ($this->ownerAlertEmails($booking) as $email) {
+                $this->notificationService->dispatchNotification(
+                    event:      FlightNotificationEvent::OWNER_EXTRA_BAGGAGE_REQUEST,
+                    recipients: ['email' => $email],
+                    template:   'owner_extra_baggage_request',
+                    data:       $payload,
+                    booking:    $booking,
+                    channels:   ['email']
+                );
+            }
+        } catch (Throwable $e) {
+            Log::warning('Extra baggage owner email failed', ['booking' => $booking->booking_reference, 'error' => $e->getMessage()]);
+        }
+
+        if (! $booking->tenant_id) {
+            return;
+        }
+        // Real WhatsApp through the tenant's own provider (Settings → WhatsApp),
+        // using the approved "flight_extra_baggage_request" template.
+        $whatsApp = app(\Modules\Notification\Services\Channels\WhatsAppChannel::class);
+        foreach ($this->ownerAlertWhatsAppNumbers($booking) as $number) {
+            try {
+                $whatsApp->send($number, [
+                    'tenant_id'   => (int) $booking->tenant_id,
+                    'audience'    => 'flight_owner_alert',
+                    'campaign_id' => "flight-extra-baggage:{$booking->id}:{$number}",
+                    'template'    => 'flight_extra_baggage_request',
+                    'parameters'  => [
+                        'booking_reference' => $payload['booking_reference'],
+                        'customer_name'     => $payload['customer_name'],
+                        'customer_phone'    => $payload['customer_phone'],
+                        'flight'            => "{$payload['flight_number']} {$payload['origin']}-{$payload['destination']}",
+                        'travel_date'       => $payload['departure'] ?: 'As per itinerary',
+                        'extra_baggage'     => $baggage,
+                    ],
+                ]);
+            } catch (Throwable $e) {
+                Log::warning('Extra baggage owner WhatsApp failed', ['booking' => $booking->booking_reference, 'error' => $e->getMessage()]);
+            }
+        }
+    }
+
+    /**
+     * Owner WhatsApp numbers from Booking Settings ("booking alert WhatsApp
+     * numbers"), digits only with country code.
+     *
+     * @return string[]
+     */
+    protected function ownerAlertWhatsAppNumbers(FlightBooking $booking): array
+    {
+        $tenant = \Modules\Saas\Models\Tenant::query()->withoutGlobalScopes()->find($booking->tenant_id);
+        $numbers = (array) data_get($tenant?->settings, 'flight_booking.booking_alert_whatsapp_numbers', []);
+
+        return array_values(array_unique(array_filter(
+            array_map(fn ($number) => preg_replace('/\D+/', '', (string) $number), $numbers),
+            fn (string $number) => strlen($number) >= 10 && strlen($number) <= 15,
+        )));
+    }
+
+    /**
+     * Owner addresses from Booking Settings ("booking alert emails"); when none
+     * are set, the tenant's staff accounts.
+     *
+     * @return string[]
+     */
+    protected function ownerAlertEmails(FlightBooking $booking): array
+    {
+        $tenant = $booking->tenant_id
+            ? \Modules\Saas\Models\Tenant::query()->withoutGlobalScopes()->find($booking->tenant_id)
+            : null;
+        $configured = (array) data_get($tenant?->settings, 'flight_booking.booking_alert_emails', []);
+        $emails = match (true) {
+            $configured !== [] => $configured,
+            $tenant !== null => User::query()->where('tenant_id', $tenant->id)->whereNotNull('email')->limit(10)->pluck('email')->all(),
+            default => [],
+        };
+
+        return array_values(array_unique(array_filter(
+            array_map(fn ($email) => strtolower(trim((string) $email)), $emails),
+            fn (string $email) => filter_var($email, FILTER_VALIDATE_EMAIL) !== false,
+        )));
     }
 
     public function handlePaymentFailed(FlightPaymentFailed $event): void
@@ -248,17 +389,23 @@ class FlightNotificationSubscriber
         try {
             $booking = $event->booking;
             $refund = $event->refund;
+            // We could not seat them (see FlightPnrAllocationService): send the
+            // "sold out, full refund" email instead of a normal cancellation.
+            $soldOut = str_starts_with((string) $booking->cancellation_reason, FlightBooking::SOLD_OUT_REASON_PREFIX);
+            $reason = $soldOut
+                ? substr((string) $booking->cancellation_reason, strlen(FlightBooking::SOLD_OUT_REASON_PREFIX))
+                : ($refund?->reason ?? 'Cancelled');
             $this->notificationService->dispatchNotification(
-                event:      FlightNotificationEvent::BOOKING_CANCELLED,
+                event:      $soldOut ? FlightNotificationEvent::BOOKING_SOLD_OUT : FlightNotificationEvent::BOOKING_CANCELLED,
                 recipients: [
                     'email'    => $booking->contact_email,
                     'phone'    => $booking->contact_phone,
                     'whatsapp' => $booking->contact_phone,
                 ],
-                template:   'cancellation_confirmation',
+                template:   $soldOut ? 'booking_sold_out' : 'cancellation_confirmation',
                 data:       array_merge($this->extractBookingPayload($booking), [
                     'refund_amount' => $refund?->refund_amount ?? 0.00,
-                    'reason'        => $refund?->reason ?? 'Cancelled',
+                    'reason'        => $reason,
                 ]),
                 booking:    $booking,
                 channels:   ['email', 'sms', 'whatsapp']

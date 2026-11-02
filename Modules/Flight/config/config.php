@@ -31,6 +31,11 @@ return [
     // allow login for numbers that have booked before).
     'customer_otp_tenant_id' => env('FLIGHT_CUSTOMER_OTP_TENANT_ID'),
 
+    // The agency whose logo, loader logo and favicon are shown to visitors
+    // who are not signed in and not on an agency's own domain (the public
+    // flight site and the login page). Empty: the platform default logo.
+    'public_brand_tenant_id' => env('FLIGHT_PUBLIC_BRAND_TENANT_ID'),
+
     // Airports, airlines, aircraft and cabin classes are private per tenant.
     // false: a new tenant starts with an empty list and adds its own.
     // true:  a new tenant starts with a copy of the platform starter template.
