@@ -34,103 +34,6 @@ class FlightAncillaryController extends Controller
     }
 
     /**
-     * Get visual seat map with real-time lock/availability states.
-     * GET /api/v1/flight/inventories/{inventoryId}/seat-map
-     */
-    public function getSeatMap(Request $request, int $inventoryId): JsonResponse
-    {
-        try {
-            $tenant = $this->resolveTenant($request);
-            $cabinClass = $request->input('cabin_class', 'ECONOMY');
-            $seatMap = $this->ancillaryService->getSeatMap($inventoryId, $tenant, $cabinClass);
-
-            return ApiResponse::success($seatMap);
-        } catch (DomainException $e) {
-            return ApiResponse::errors(null, $e->getMessage(), 404);
-        } catch (\Throwable $e) {
-            return ApiResponse::errors(null, $e->getMessage(), 500);
-        }
-    }
-
-    /**
-     * Lock a seat with distributed concurrency safety and TTL.
-     * POST /api/v1/flight/inventories/{inventoryId}/seats/lock
-     */
-    public function lockSeat(Request $request, int $inventoryId): JsonResponse
-    {
-        $validated = $request->validate([
-            'seat_number'  => 'required|string|max:10',
-            'passenger_id' => 'nullable|integer',
-            'booking_id'   => 'nullable|integer',
-            'ttl_seconds'  => 'nullable|integer|min:60|max:1800',
-        ]);
-
-        try {
-            $tenant = $this->resolveTenant($request);
-            $ttl = (int) ($validated['ttl_seconds'] ?? 600);
-            $lock = $this->ancillaryService->lockSeat(
-                $inventoryId,
-                $validated['seat_number'],
-                $validated['passenger_id'] ?? null,
-                $validated['booking_id'] ?? null,
-                $ttl,
-                $tenant
-            );
-
-            return ApiResponse::success([
-                'id'                => $lock->id,
-                'seat_number'       => $lock->seat_number,
-                'lock_token'        => $lock->lock_token,
-                'status'            => $lock->status->value,
-                'status_label'      => $lock->status->label(),
-                'expires_at'        => $lock->expires_at->toIso8601String(),
-                'remaining_seconds' => $lock->remaining_seconds,
-            ]);
-        } catch (DomainException $e) {
-            return ApiResponse::errors(null, $e->getMessage(), 422);
-        } catch (\Throwable $e) {
-            return ApiResponse::errors(null, $e->getMessage(), 500);
-        }
-    }
-
-    /**
-     * Release a temporary seat lock.
-     * POST /api/v1/flight/inventories/{inventoryId}/seats/release
-     */
-    public function releaseSeatLock(Request $request, int $inventoryId): JsonResponse
-    {
-        $validated = $request->validate([
-            'lock_token' => 'required|string|max:64',
-        ]);
-
-        $tenant = $this->resolveTenant($request);
-        $released = $this->ancillaryService->releaseSeatLock($validated['lock_token'], $tenant);
-
-        return ApiResponse::success([
-            'released' => $released,
-            'message'  => $released ? 'Seat lock released successfully.' : 'Seat lock not found or already released.',
-        ]);
-    }
-
-    /**
-     * Retrieve available ancillaries catalog (Baggage, Meals, Lounge, Special Services).
-     * GET /api/v1/flight/inventories/{inventoryId}/ancillaries
-     */
-    public function getAncillaries(Request $request, int $inventoryId): JsonResponse
-    {
-        try {
-            $tenant = $this->resolveTenant($request);
-            $ancillaries = $this->ancillaryService->getAvailableAncillaries($inventoryId, $tenant);
-
-            return ApiResponse::success($ancillaries);
-        } catch (DomainException $e) {
-            return ApiResponse::errors(null, $e->getMessage(), 404);
-        } catch (\Throwable $e) {
-            return ApiResponse::errors(null, $e->getMessage(), 500);
-        }
-    }
-
-    /**
      * Add selected ancillary or seat to a booking passenger and update total price.
      * POST /api/v1/flight/bookings/{identifier}/ancillaries
      */
@@ -176,29 +79,6 @@ class FlightAncillaryController extends Controller
                     'status'       => $a->status,
                 ]),
                 'message'           => 'Ancillary added successfully and booking total updated.',
-            ]);
-        } catch (DomainException $e) {
-            return ApiResponse::errors(null, $e->getMessage(), 422);
-        } catch (\Throwable $e) {
-            return ApiResponse::errors(null, $e->getMessage(), 500);
-        }
-    }
-
-    /**
-     * Remove an ancillary from a booking and deduct from total.
-     * DELETE /api/v1/flight/bookings/{identifier}/ancillaries/{ancillaryId}
-     */
-    public function removeAncillaryFromBooking(Request $request, string $identifier, int $ancillaryId): JsonResponse
-    {
-        try {
-            $tenant = $this->resolveTenant($request);
-            $booking = $this->ancillaryService->removeAncillaryFromBooking($identifier, $ancillaryId, $tenant);
-
-            return ApiResponse::success([
-                'booking_reference' => $booking->booking_reference,
-                'total_amount'      => (float) $booking->total_amount,
-                'currency'          => $booking->currency,
-                'message'           => 'Ancillary removed and booking total recalculated.',
             ]);
         } catch (DomainException $e) {
             return ApiResponse::errors(null, $e->getMessage(), 422);

@@ -11,6 +11,7 @@ use Modules\Core\Http\Controllers\Controller;
 use Modules\Saas\Support\TenantContext;
 use Modules\Setting\Enums\SettingSection;
 use Modules\Setting\Http\Requests\Api\V1\SaveSettingRequest;
+use Modules\Setting\Models\Setting;
 use Modules\Setting\Services\Setting\SettingServiceInterface;
 use Modules\Support\ApiResponse;
 
@@ -194,6 +195,7 @@ class SettingController extends Controller
             app()->bound(TenantContext::class) ? (app(TenantContext::class)->id() ?: 'platform') : 'platform',
             app()->getLocale(),
             $includeLogoData ? 'with-logo-data' : 'lean',
+            'v'.Setting::cacheVersion(),
         ], false);
 
         $settings = Cache::tags('settings')->remember(

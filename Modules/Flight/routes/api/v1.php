@@ -59,6 +59,7 @@ Route::prefix('flight')->group(function () {
         Route::get('/fare-families', [FlightFareFamilyController::class, 'index']);
         Route::get('/fare-families/{identifier}', [FlightFareFamilyController::class, 'show']);
         Route::get('/configuration/{key}', [FlightBookingSettingsController::class, 'showConfiguration']);
+        Route::get('/public/refund-policy', [FlightBookingSettingsController::class, 'showPublicRefundPolicy']);
 
         // Phase 11: Customer Flight Search & Aggregation
         Route::match(['get', 'post'], '/search', [FlightSearchController::class, 'search']);
@@ -80,12 +81,6 @@ Route::prefix('flight')->group(function () {
         // Phase 13: Flight Booking Lifecycle (Public / Guest / Customer)
         Route::post('/bookings', [FlightBookingController::class, 'createBooking']);
 
-        // Phase 14: Ancillaries, Seat Map, Seat Locking & Passenger Selection
-        Route::get('/inventories/{inventoryId}/seat-map', [FlightAncillaryController::class, 'getSeatMap']);
-        Route::post('/inventories/{inventoryId}/seats/lock', [FlightAncillaryController::class, 'lockSeat']);
-        Route::post('/inventories/{inventoryId}/seats/release', [FlightAncillaryController::class, 'releaseSeatLock']);
-        Route::get('/inventories/{inventoryId}/ancillaries', [FlightAncillaryController::class, 'getAncillaries']);
-
         // Phase 15 / 21: gateway callbacks are signature-checked, not token-checked.
         Route::post('/payments/webhook/{gateway}', [FlightPaymentController::class, 'webhook']);
         Route::post('/webhooks/{provider}', [FlightWebhookController::class, 'handleWebhook']);
@@ -97,7 +92,6 @@ Route::prefix('flight')->group(function () {
             Route::get('/bookings/{identifier}/status', [FlightBookingController::class, 'bookingStatus']);
 
             Route::post('/bookings/{identifier}/ancillaries', [FlightAncillaryController::class, 'addAncillaryToBooking']);
-            Route::delete('/bookings/{identifier}/ancillaries/{ancillaryId}', [FlightAncillaryController::class, 'removeAncillaryFromBooking']);
 
             Route::post('/bookings/{identifier}/payment', [FlightPaymentController::class, 'initiate']);
             Route::post('/payments/{reference}/verify', [FlightPaymentController::class, 'verify']);
@@ -151,6 +145,19 @@ Route::prefix('flight')->group(function () {
         ->withoutMiddleware(['auth', EnsureAuthenticatedTenant::class]);
 
     // Reference Management (Super Admin & Flight Admin)
+
+    // ── Flight coupons & discounts (admin, per tenant) ──────────────────
+    foreach (['coupons' => 'coupon', 'discounts' => 'discount'] as $path => $kind) {
+        Route::prefix('/'.$path)->controller(FlightOfferAdminController::class)->group(function () use ($kind) {
+            Route::get('/', 'index')->defaults('kind', $kind)->middleware('can:admin.vouchers.index');
+            Route::get('/form/meta', 'formMeta')->defaults('kind', $kind)->middleware('permission:admin.vouchers.edit|admin.vouchers.create');
+            Route::get('/{id}', 'show')->defaults('kind', $kind)->whereNumber('id')->middleware('permission:admin.vouchers.show|admin.vouchers.edit');
+            Route::post('/', 'store')->defaults('kind', $kind)->middleware('can:admin.vouchers.create');
+            Route::put('/{id}', 'update')->defaults('kind', $kind)->whereNumber('id')->middleware('can:admin.vouchers.edit');
+            Route::delete('/{ids}', 'destroy')->defaults('kind', $kind)->middleware('can:admin.vouchers.destroy');
+        });
+    }
+
     Route::get('/settings/booking-window', [FlightBookingSettingsController::class, 'show']);
     Route::put('/settings/booking-window', [FlightBookingSettingsController::class, 'update']);
     Route::get('/settings/ticket-advisory', [FlightBookingSettingsController::class, 'showTicketAdvisory']);
@@ -186,6 +193,9 @@ Route::prefix('flight')->group(function () {
     Route::get('/routes/{id}', [FlightRouteController::class, 'show']);
     Route::put('/routes/{id}', [FlightRouteController::class, 'update']);
     Route::delete('/routes/{id}', [FlightRouteController::class, 'destroy']);
+    // Choose which paid bookings a route's PNR covers; the rest can be sold out.
+    Route::get('/routes/{id}/pnr-pending-bookings', [FlightRouteController::class, 'pnrPendingBookings'])->whereNumber('id');
+    Route::post('/routes/{id}/allocate-pnr', [FlightRouteController::class, 'allocatePnr'])->whereNumber('id');
 
     // Tenant Flight Schedules CRUD
     Route::get('/schedules', [FlightScheduleController::class, 'index']);
@@ -321,6 +331,7 @@ Route::prefix('flight')->group(function () {
     // â”€â”€ Phase 13: Bookings Management (Tenant/Admin) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     Route::get('/bookings', [FlightBookingController::class, 'listBookings']);
     Route::put('/bookings/{identifier}/pnr', [FlightBookingController::class, 'assignPnr']);
+    Route::post('/bookings/{identifier}/sold-out', [FlightBookingController::class, 'markSoldOut']);
 
     // â”€â”€ Phase 15: B2B Wallet Payment â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     Route::post('/bookings/{identifier}/pay-wallet', [FlightPaymentController::class, 'payWithWallet']);

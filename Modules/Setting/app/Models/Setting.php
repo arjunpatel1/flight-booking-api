@@ -40,7 +40,7 @@ class Setting extends Model
     {
         try {
             return Cache::tags('settings')->rememberForever(
-                makeCacheKey(['settings', 'list', static::activeScopeKey()]),
+                makeCacheKey(['settings', 'list', static::activeScopeKey(), 'v'.static::cacheVersion()]),
                 fn() => self::scopedQuery()->get()->mapWithKeys(function ($setting) {
                     return [$setting->key => $setting->payload];
                 })
@@ -48,6 +48,21 @@ class Setting extends Model
         } catch (QueryException) {
             return collect();
         }
+    }
+
+    /**
+     * Part of every settings cache key. Bumped on each save, so cached
+     * settings refresh even on cache stores that ignore tags (the file store
+     * used locally reports a tag flush as done but keeps the entries).
+     */
+    public static function cacheVersion(): int
+    {
+        return (int) Cache::get('settings.cache_version', 1);
+    }
+
+    public static function bumpCacheVersion(): void
+    {
+        Cache::forever('settings.cache_version', static::cacheVersion() + 1);
     }
 
     /**

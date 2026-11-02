@@ -44,7 +44,8 @@ class FlightSearchParams
             adults:              max(1, (int) ($data['adults'] ?? 1)),
             children:            max(0, (int) ($data['children'] ?? 0)),
             infants:             max(0, (int) ($data['infants'] ?? 0)),
-            cabinClass:          $data['cabin_class'] ?? ($data['cabinClass'] ?? 'ECONOMY'),
+            // No cabin chosen ("All Cabins") searches every cabin; '' = no filter.
+            cabinClass:          $data['cabin_class'] ?? ($data['cabinClass'] ?? ''),
             airlines:            isset($data['airlines']) ? (array) $data['airlines'] : null,
             maxStops:            isset($data['max_stops']) ? (int) $data['max_stops'] : (isset($data['maxStops']) ? (int) $data['maxStops'] : null),
             minPrice:            isset($data['min_price']) ? (float) $data['min_price'] : (isset($data['minPrice']) ? (float) $data['minPrice'] : null),

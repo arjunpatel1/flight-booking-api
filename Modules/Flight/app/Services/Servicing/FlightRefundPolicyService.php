@@ -23,10 +23,12 @@ class FlightRefundPolicyService
         'enabled' => true,
         // Charges per passenger, by time left before departure. Evaluated top to
         // bottom; the first slab whose min_hours_before_departure is met applies.
+        // A percentage of the base fare, so each cabin/fare is charged in
+        // proportion to what it cost (a flat amount would hit Economy hardest).
         'slabs' => [
-            ['min_hours_before_departure' => 96, 'fee_type' => 'fixed', 'fee_value' => 1500, 'label' => 'More than 4 days before departure'],
-            ['min_hours_before_departure' => 24, 'fee_type' => 'fixed', 'fee_value' => 3000, 'label' => '1 to 4 days before departure'],
-            ['min_hours_before_departure' => 3, 'fee_type' => 'fixed', 'fee_value' => 3500, 'label' => '3 to 24 hours before departure'],
+            ['min_hours_before_departure' => 96, 'fee_type' => 'percent', 'fee_value' => 25, 'label' => 'More than 4 days before departure'],
+            ['min_hours_before_departure' => 24, 'fee_type' => 'percent', 'fee_value' => 50, 'label' => '1 to 4 days before departure'],
+            ['min_hours_before_departure' => 3, 'fee_type' => 'percent', 'fee_value' => 75, 'label' => '3 to 24 hours before departure'],
         ],
         // Inside this many hours (or after departure) the booking is a no-show:
         // only statutory taxes & fees are refunded.
@@ -38,6 +40,9 @@ class FlightRefundPolicyService
         'convenience_fee_refundable' => false,
         // Agency processing charge, per passenger, on every refunded cancellation.
         'service_fee_per_passenger' => 300,
+        // Date change (reschedule) fee per booking, plus any fare difference.
+        // A reschedule_fee in a fare's own rules overrides it.
+        'reschedule_fee' => 750,
         // Free cancellation shortly after booking (DGCA "look-in" option).
         'look_in' => [
             'enabled' => true,
@@ -76,6 +81,8 @@ class FlightRefundPolicyService
             'refund_taxes_on_no_show' => ['required', 'boolean'],
             'convenience_fee_refundable' => ['required', 'boolean'],
             'service_fee_per_passenger' => ['required', 'numeric', 'min:0', 'max:100000'],
+            // Optional so older admin clients that don't send it keep saving.
+            'reschedule_fee' => ['sometimes', 'numeric', 'min:0', 'max:1000000'],
             'look_in.enabled' => ['required', 'boolean'],
             'look_in.hours_after_booking' => ['required', 'integer', 'min:0', 'max:720'],
             'look_in.min_days_before_departure' => ['required', 'integer', 'min:0', 'max:365'],
@@ -86,12 +93,18 @@ class FlightRefundPolicyService
 
     public function normalize(array $policy): array
     {
-        $slabs = array_values(array_map(fn (array $slab) => [
-            'min_hours_before_departure' => max(0, (int) ($slab['min_hours_before_departure'] ?? 0)),
-            'fee_type' => ($slab['fee_type'] ?? 'fixed') === 'percent' ? 'percent' : 'fixed',
-            'fee_value' => max(0, (float) ($slab['fee_value'] ?? 0)),
-            'label' => trim((string) ($slab['label'] ?? '')),
-        ], (array) ($policy['slabs'] ?? [])));
+        $slabs = array_values(array_map(function (array $slab) {
+            $isPercent = ($slab['fee_type'] ?? 'fixed') === 'percent';
+            $value = max(0, (float) ($slab['fee_value'] ?? 0));
+
+            return [
+                'min_hours_before_departure' => max(0, (int) ($slab['min_hours_before_departure'] ?? 0)),
+                'fee_type' => $isPercent ? 'percent' : 'fixed',
+                // A percentage of the fare can't exceed the whole fare.
+                'fee_value' => $isPercent ? min(100.0, $value) : $value,
+                'label' => trim((string) ($slab['label'] ?? '')),
+            ];
+        }, (array) ($policy['slabs'] ?? [])));
         // Furthest-out slab first so the first match is the right one.
         usort($slabs, fn ($a, $b) => $b['min_hours_before_departure'] <=> $a['min_hours_before_departure']);
 
@@ -103,6 +116,7 @@ class FlightRefundPolicyService
             'refund_taxes_on_no_show' => (bool) ($policy['refund_taxes_on_no_show'] ?? true),
             'convenience_fee_refundable' => (bool) ($policy['convenience_fee_refundable'] ?? false),
             'service_fee_per_passenger' => max(0, (float) ($policy['service_fee_per_passenger'] ?? 0)),
+            'reschedule_fee' => max(0, (float) ($policy['reschedule_fee'] ?? self::DEFAULT_POLICY['reschedule_fee'])),
             'look_in' => [
                 'enabled' => (bool) data_get($policy, 'look_in.enabled', false),
                 'hours_after_booking' => max(0, (int) data_get($policy, 'look_in.hours_after_booking', 0)),

@@ -7,6 +7,8 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Modules\Core\Http\Controllers\Controller;
 use Modules\Flight\Services\Booking\FlightBookingService;
+use Modules\Flight\Services\Booking\FlightPnrAllocationService;
+use Modules\Flight\Models\FlightBooking;
 use Modules\Flight\Models\FlightCustomer;
 use Modules\Saas\Models\Tenant;
 use Modules\Support\ApiResponse;
@@ -66,6 +68,8 @@ class FlightBookingController extends Controller
             'passengers.*.frequent_flyer_number'   => 'nullable|string|max:50',
             'passengers.*.contact_email'           => 'nullable|email|max:150',
             'passengers.*.contact_phone'           => 'nullable|string|max:50',
+            // Extra baggage the customer asked for, paid offline to the agent.
+            'passengers.*.extra_baggage_kg'        => 'nullable|numeric|min:1|max:100',
             'contact_name'                         => 'nullable|string|max:150',
             'contact_email'                        => 'nullable|email|max:150',
             'contact_phone'                        => 'nullable|string|max:50',
@@ -353,6 +357,37 @@ class FlightBookingController extends Controller
             report($e);
             return ApiResponse::errors(null, 'Could not save the PNR for this booking.', 500);
         }
+    }
+
+    /**
+     * Cancel a paid booking still waiting for a PNR because its seat could not
+     * be secured: full refund and the "sold out" email.
+     * POST /api/v1/flight/bookings/{identifier}/sold-out
+     */
+    public function markSoldOut(Request $request, string $identifier, FlightPnrAllocationService $pnrAllocation): JsonResponse
+    {
+        $tenant = $this->resolveTenant($request);
+        $booking = FlightBooking::query()
+            ->where(function ($query) use ($identifier): void {
+                $query->where('booking_reference', $identifier);
+                if (is_numeric($identifier)) {
+                    $query->orWhere('id', (int) $identifier);
+                }
+            })
+            ->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id))
+            ->first();
+
+        if (! $booking) {
+            return ApiResponse::errors(null, 'Booking not found.', 404);
+        }
+
+        try {
+            $result = $pnrAllocation->markSoldOut($booking, 'the flight was sold out before your seat could be confirmed.');
+        } catch (DomainException $e) {
+            return ApiResponse::errors(null, $e->getMessage(), 422);
+        }
+
+        return ApiResponse::success($result, 'Booking marked sold out. The customer gets a full refund and an email.');
     }
 
     /**

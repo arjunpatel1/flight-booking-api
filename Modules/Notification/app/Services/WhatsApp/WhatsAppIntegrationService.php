@@ -10,32 +10,38 @@ use RuntimeException;
 
 class WhatsAppIntegrationService
 {
-    public function status(): array
+    /**
+     * @param bool $flight A flight agency only sends login OTPs over WhatsApp, so
+     *                     the restaurant order events are not required.
+     */
+    public function status(bool $flight = false): array
     {
         $nexMsgTemplates = collect(setting('whatsapp_templates') ?: [])
             ->filter(fn ($template) => is_array($template)
                 && ($template['provider'] ?? null) === 'nexmsg'
                 && ($template['approval_status'] ?? null) === 'approved'
                 && ($template['is_active'] ?? true));
-        $requiredEvents = ['customer_otp', 'order_submitted', 'order_accepted', 'preparing', 'ready', 'completed', 'cancelled', 'billing_sent'];
+        $requiredEvents = $flight
+            ? ['customer_otp']
+            : ['customer_otp', 'order_submitted', 'order_accepted', 'preparing', 'ready', 'completed', 'cancelled', 'billing_sent'];
         $managedAssignment = $this->managedNexMsgAssignment();
         $capabilities = (array) ($managedAssignment?->capabilities ?? []);
         $orderingEnabled = data_get($capabilities, 'ordering') === true || in_array('ordering', $capabilities, true);
-        if ($orderingEnabled) {
+        if ($orderingEnabled && ! $flight) {
             $requiredEvents[] = 'whatsapp_order_received';
             $requiredEvents[] = 'whatsapp_order_received_payment';
         }
         // Delivery tracking is required only when the paid provider workflow is
         // enabled for this restaurant. Normal in-house delivery remains usable
         // without a provider integration or provider-specific templates.
-        if (setting('third_party_delivery_enabled', false)) {
+        if (! $flight && setting('third_party_delivery_enabled', false)) {
             $requiredEvents[] = 'delivery_update';
         }
         $mappedEvents = $nexMsgTemplates->pluck('event')->filter()->unique();
         $missingEvents = collect($requiredEvents)->reject(fn (string $event) => $mappedEvents->contains($event))->values()->all();
         $capabilityGaps = [];
         $submitted = $nexMsgTemplates->firstWhere('event', 'order_submitted');
-        if (is_array($submitted)) {
+        if (! $flight && is_array($submitted)) {
             // The secure order page owns payment, the five-minute cancellation
             // gate and live tracking. One stable button avoids exposing raw
             // payment/cancellation URLs in the message body.
@@ -43,7 +49,7 @@ class WhatsAppIntegrationService
                 $capabilityGaps[] = 'order_submitted.tracking_link';
             }
         }
-        if (setting('third_party_delivery_enabled', false)) {
+        if (! $flight && setting('third_party_delivery_enabled', false)) {
             $deliveryUpdate = $nexMsgTemplates->firstWhere('event', 'delivery_update');
             if (is_array($deliveryUpdate) && ! $this->hasUrlButton($deliveryUpdate, ['tracking_link'])) {
                 $capabilityGaps[] = 'delivery_update.tracking_link';

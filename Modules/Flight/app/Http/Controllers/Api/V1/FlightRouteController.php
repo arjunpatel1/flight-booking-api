@@ -2,18 +2,19 @@
 
 namespace Modules\Flight\Http\Controllers\Api\V1;
 
+use DomainException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Modules\Core\Http\Controllers\Controller;
+use Modules\Flight\Services\Booking\FlightPnrAllocationService;
 use Modules\Flight\Services\Catalog\FlightCatalogTenant;
-use Modules\Flight\Services\Booking\FlightBookingService;
 use Modules\Flight\Models\FlightRoute;
 use Modules\Support\ApiResponse;
 
 class FlightRouteController extends Controller
 {
-    public function __construct(protected FlightBookingService $bookingService)
+    public function __construct(protected FlightPnrAllocationService $pnrAllocation)
     {
     }
 
@@ -86,21 +87,82 @@ class FlightRouteController extends Controller
             'is_active' => ['nullable', 'boolean'],
         ] + $this->flightDetailsRules());
 
-        $updatedBookings = DB::transaction(function () use ($route, $validated): int {
-            $route->update($validated);
-
-            if (! array_key_exists('pnr_number', $validated) || blank($validated['pnr_number'])) {
-                return 0;
-            }
-
-            return $this->bookingService->assignRoutePnr($route->fresh());
-        });
-
+        $route->update($validated);
         $route->load(['originAirport', 'destinationAirport']);
 
-        return ApiResponse::success($route->fresh(), $updatedBookings > 0
-            ? "Flight route updated. PNR assigned to {$updatedBookings} paid booking(s)."
+        // Saving a PNR no longer hands it to everyone waiting: the airline may
+        // confirm fewer seats than we sold, so the admin picks who it covers
+        // (see pnrPendingBookings / allocatePnr).
+        $waiting = filled($route->pnr_number) ? $this->pnrAllocation->pendingBookingsForRoute($route)->count() : 0;
+
+        return ApiResponse::success($route->fresh(['originAirport', 'destinationAirport']), $waiting > 0
+            ? "Flight route updated. {$waiting} paid booking(s) are waiting for this PNR — choose who it covers."
             : 'Flight route updated successfully');
+    }
+
+    /** Paid bookings on this route's flight still waiting for a PNR, first paid first. */
+    public function pnrPendingBookings(int $id): JsonResponse
+    {
+        $route = FlightRoute::findOrFail($id);
+
+        return ApiResponse::success([
+            'route_id' => $route->id,
+            'pnr_number' => $route->pnr_number,
+            'bookings' => $this->pnrAllocation->pendingBookingsForRoute($route)->map(fn ($booking) => [
+                'booking_reference' => $booking->booking_reference,
+                'contact_name' => $booking->contact_name,
+                'contact_email' => $booking->contact_email,
+                'contact_phone' => $booking->contact_phone,
+                'passenger_count' => max(1, $booking->passengers->count()
+                    ?: (int) $booking->pax_count_adult + (int) $booking->pax_count_child + (int) $booking->pax_count_infant),
+                'passenger_names' => $booking->passengers->map(fn ($p) => trim("{$p->first_name} {$p->last_name}"))->filter()->values(),
+                'total_amount' => (float) $booking->total_amount,
+                'currency' => $booking->currency ?: 'INR',
+                'paid_at' => $booking->confirmed_at?->toIso8601String(),
+            ])->values(),
+        ]);
+    }
+
+    /**
+     * Give the route's (or a given) PNR to the chosen bookings; optionally sell
+     * out everyone else still waiting (full refund + "sold out" email).
+     */
+    public function allocatePnr(Request $request, int $id): JsonResponse
+    {
+        $route = FlightRoute::findOrFail($id);
+        $validated = $request->validate([
+            'pnr' => ['nullable', 'string', 'max:50', 'regex:/^[A-Za-z0-9-]+$/'],
+            'booking_references' => ['present', 'array', 'max:500'],
+            'booking_references.*' => ['string', 'max:64'],
+            'sold_out_remaining' => ['required', 'boolean'],
+        ]);
+
+        $pnr = $validated['pnr'] ?? $route->pnr_number;
+        if (blank($pnr)) {
+            return ApiResponse::errors(null, 'Enter the airline PNR first.', 422);
+        }
+        if ($validated['booking_references'] === [] && ! $validated['sold_out_remaining']) {
+            return ApiResponse::errors(null, 'Choose at least one booking for this PNR.', 422);
+        }
+
+        try {
+            if (filled($validated['pnr'] ?? null) && strtoupper($validated['pnr']) !== strtoupper((string) $route->pnr_number)) {
+                $route->update(['pnr_number' => strtoupper($validated['pnr'])]);
+            }
+            $result = $this->pnrAllocation->allocate($route->fresh(), $pnr, $validated['booking_references'], $validated['sold_out_remaining']);
+        } catch (DomainException $e) {
+            return ApiResponse::errors(null, $e->getMessage(), 422);
+        }
+
+        $message = sprintf('PNR %s given to %d booking(s).', strtoupper($pnr), count($result['assigned']));
+        if ($result['sold_out'] !== []) {
+            $message .= sprintf(' %d booking(s) marked sold out with a full refund.', count($result['sold_out']));
+        }
+        if ($result['ticket_failed'] !== []) {
+            $message .= ' E-tickets for ' . implode(', ', $result['ticket_failed']) . ' need a retry.';
+        }
+
+        return ApiResponse::success($result, $message);
     }
 
     /**

@@ -117,11 +117,16 @@ class FlightSearchEngine
             return ['itineraries' => [], 'raw_itineraries' => [], 'all_fares' => []];
         }
 
-        // 1. Search Internal Inventory
+        // 1. Search Internal Inventory. A flight sold in several cabins has one
+        //    inventory row per cabin (each with its own fare family and price);
+        //    combine them into one itinerary instead of letting the last cabin
+        //    overwrite the others. Each fare keeps its own inventory id.
         $internalItineraries = $this->searchInternalInventory($params, $tenant);
         foreach ($internalItineraries as $itinerary) {
             $key = $this->generateItineraryKey($itinerary);
-            $rawItineraries[$key] = $itinerary;
+            $rawItineraries[$key] = isset($rawItineraries[$key])
+                ? $this->mergeItineraries($rawItineraries[$key], $itinerary)
+                : $itinerary;
         }
 
         // 2. Search Configured Suppliers
@@ -196,20 +201,20 @@ class FlightSearchEngine
         // dated admin route would otherwise match every date. Collect the dates
         // each flight is actually scheduled on, keyed the same way the booking
         // service links inventory to its route.
-        $routeDates = FlightRoute::query()
+        $datedRoutes = FlightRoute::query()
             ->withoutGlobalScopes()
             ->whereIn('tenant_id', $inventories->pluck('tenant_id')->filter()->unique())
             ->whereIn('flight_number', $inventories->pluck('flight_number')->unique())
             ->whereNotNull('flight_date')
-            ->get(['tenant_id', 'flight_number', 'origin_airport_id', 'destination_airport_id', 'flight_date', 'flight_time'])
+            ->get(['tenant_id', 'flight_number', 'origin_airport_id', 'destination_airport_id', 'flight_date', 'flight_time', 'gst_percentage'])
             ->groupBy(fn (FlightRoute $route) => $this->routeKey(
                 $route->tenant_id,
                 $route->flight_number,
                 $route->origin_airport_id,
                 $route->destination_airport_id,
                 $route->flight_time,
-            ))
-            ->map(fn ($routes) => $routes->map(fn (FlightRoute $route) => $route->flight_date->toDateString())->unique());
+            ));
+        $routeDates = $datedRoutes->map(fn ($routes) => $routes->map(fn (FlightRoute $route) => $route->flight_date->toDateString())->unique());
         $depDayOfWeek = strtolower($carbonDate->format('l'));
         $depDayShort = strtolower($carbonDate->format('D'));
         $depDayIso = (int) $carbonDate->format('N');
@@ -258,8 +263,18 @@ class FlightSearchEngine
                 }
             }
 
+            // The GST % entered on this flight's route for the searched date (0 if none).
+            $route = $datedRoutes->get($this->routeKey(
+                $inventory->tenant_id,
+                $inventory->flight_number,
+                $inventory->origin_airport_id,
+                $inventory->destination_airport_id,
+                $inventory->departure_time,
+            ))?->first(fn (FlightRoute $route) => $route->flight_date->toDateString() === $carbonDate->toDateString());
+            $routeGstPercent = max(0.0, (float) ($route?->gst_percentage ?? 0));
+
             // Standardize Itinerary
-            $itinerary = $this->transformInternalInventoryToItinerary($inventory, $params);
+            $itinerary = $this->transformInternalInventoryToItinerary($inventory, $params, $routeGstPercent);
             if (! empty($itinerary['fares'])) {
                 $itineraries[] = $itinerary;
             }
@@ -292,7 +307,8 @@ class FlightSearchEngine
                 destination:   $params->destination,
                 departureDate: $params->departureDate,
                 returnDate:    $params->returnDate,
-                cabinClass:    $params->cabinClass,
+                // Suppliers need a concrete cabin; "all cabins" asks them for economy as before.
+                cabinClass:    $params->cabinClass ?: 'ECONOMY',
                 adults:        $params->adults,
                 children:      $params->children,
                 infants:       $params->infants,
@@ -320,7 +336,7 @@ class FlightSearchEngine
     /**
      * Transform internal FlightInventory into standardized Itinerary DTO with aggregated fares.
      */
-    protected function transformInternalInventoryToItinerary(FlightInventory $inv, FlightSearchParams $params): array
+    protected function transformInternalInventoryToItinerary(FlightInventory $inv, FlightSearchParams $params, float $routeGstPercent = 0.0): array
     {
         $durationMinutes = $this->calculateDurationMinutes($inv->departure_time, $inv->arrival_time);
         $stops = isset($inv->metadata['stops']) ? (int) $inv->metadata['stops'] : 0;
@@ -350,12 +366,14 @@ class FlightSearchEngine
             }
         }
 
-        // Fallback: If no explicit FlightFare model rows exist, create default standard fare from inventory
-        if (empty($fares)) {
+        // Fallback: only when the inventory has no saved fares at all. If it has
+        // saved fares that just don't match the searched cabin, it must not show
+        // an invented "STANDARD" fare that can't be booked.
+        if (empty($fares) && $activeFares->isEmpty()) {
+            // Tax is the GST % entered on the route, never an assumed rate or fee.
             $pricing = $this->pricingEngine->calculate([
                 'supplier_fare' => (float) $inv->base_price,
-                'taxes'         => round((float) $inv->base_price * 0.12, 2),
-                'supplier_fees' => 150.00,
+                'taxes'         => round((float) $inv->base_price * $routeGstPercent / 100, 2),
             ]);
 
             $fares[] = [
@@ -561,7 +579,7 @@ class FlightSearchEngine
                 'name'        => 'Standard',
                 'description' => 'Supplier Flight Offer',
             ],
-            'cabin_class'     => strtoupper($offer['cabin_class'] ?? $params->cabinClass),
+            'cabin_class'     => strtoupper($offer['cabin_class'] ?? ($params->cabinClass ?: 'ECONOMY')),
             'seats_available' => (int) ($offer['available_seats'] ?? 9),
             'baggage'         => [
                 'cabin_kg'   => $cabinKg,
