@@ -50,7 +50,8 @@ class FlightAirportController extends Controller
             'country_code' => ['required', 'string', 'size:2'],
             'latitude' => ['nullable', 'numeric'],
             'longitude' => ['nullable', 'numeric'],
-            'timezone' => ['nullable', 'string', 'max:50'],
+            // all_with_bc also accepts legacy names (e.g. Asia/Calcutta) that some browsers still list.
+            'timezone' => ['required', 'string', 'max:50', 'timezone:all_with_bc'],
             'terminals' => ['nullable'],
             'is_active' => ['nullable', 'boolean'],
         ]);
@@ -98,7 +99,7 @@ class FlightAirportController extends Controller
             'country_code' => ['sometimes', 'required', 'string', 'size:2'],
             'latitude' => ['nullable', 'numeric'],
             'longitude' => ['nullable', 'numeric'],
-            'timezone' => ['nullable', 'string', 'max:50'],
+            'timezone' => ['sometimes', 'required', 'string', 'max:50', 'timezone:all_with_bc'],
             'terminals' => ['nullable'],
             'is_active' => ['nullable', 'boolean'],
         ]);

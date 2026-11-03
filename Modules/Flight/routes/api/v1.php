@@ -60,6 +60,7 @@ Route::prefix('flight')->group(function () {
         Route::get('/fare-families/{identifier}', [FlightFareFamilyController::class, 'show']);
         Route::get('/configuration/{key}', [FlightBookingSettingsController::class, 'showConfiguration']);
         Route::get('/public/refund-policy', [FlightBookingSettingsController::class, 'showPublicRefundPolicy']);
+        Route::get('/public/route-dates', [FlightRouteController::class, 'flyingDates']);
 
         // Phase 11: Customer Flight Search & Aggregation
         Route::match(['get', 'post'], '/search', [FlightSearchController::class, 'search']);
