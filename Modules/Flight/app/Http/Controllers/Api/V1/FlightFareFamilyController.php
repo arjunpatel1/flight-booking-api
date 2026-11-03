@@ -159,6 +159,11 @@ class FlightFareFamilyController extends Controller
 
         $family->update($validated);
 
+        // Existing fares carry their own refundable/changeable copy.
+        if ($family->wasChanged(['refundability', 'changeability', 'code'])) {
+            $family->syncFlagsToFares();
+        }
+
         return ApiResponse::success($family, message: 'Fare family updated successfully');
     }
 

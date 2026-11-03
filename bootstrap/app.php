@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Auth\AuthenticationException;
+use Illuminate\Database\QueryException;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -77,6 +78,26 @@ return Application::configure(basePath: dirname(__DIR__))
             }
 
             return null;
+        });
+
+        // Database constraint failures (deleting a record still in use, a
+        // duplicate, a missing required value) otherwise surface as a bare
+        // "Server Error"; say what happened in terms an admin can act on.
+        $exceptions->render(function (QueryException $exception, Request $request) {
+            if (! ($request->is('api/*') || $request->is('v1/*') || $request->wantsJson())) {
+                return null;
+            }
+
+            [$message, $status] = match ((int) ($exception->errorInfo[1] ?? 0)) {
+                1451 => ['This record is still used elsewhere (for example by routes, inventory or bookings), so it can\'t be deleted. Remove or update those first, or mark it Inactive instead.', Response::HTTP_CONFLICT],
+                1452 => ['One of the selected items no longer exists. Refresh the page and choose it again.', Response::HTTP_UNPROCESSABLE_ENTITY],
+                1062 => ['A record with these details already exists.', Response::HTTP_CONFLICT],
+                1048 => ['A required value is missing. Please fill in all required fields and try again.', Response::HTTP_UNPROCESSABLE_ENTITY],
+                1406 => ['One of the values is too long. Please shorten it and try again.', Response::HTTP_UNPROCESSABLE_ENTITY],
+                default => [null, null],
+            };
+
+            return $message === null ? null : ApiResponse::errors(errors: null, message: $message, code: $status);
         });
 
         $exceptions->render(function (ValidationException $exception, Request $request) {

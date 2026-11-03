@@ -5,11 +5,14 @@ namespace Modules\Flight\Http\Controllers\Api\V1;
 use DomainException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 use Modules\Core\Http\Controllers\Controller;
 use Modules\Flight\Services\Booking\FlightPnrAllocationService;
 use Modules\Flight\Services\Catalog\FlightCatalogTenant;
 use Modules\Flight\Models\FlightRoute;
+use Modules\Saas\Models\Tenant;
 use Modules\Support\ApiResponse;
 
 class FlightRouteController extends Controller
@@ -56,10 +59,50 @@ class FlightRouteController extends Controller
         ] + $this->flightDetailsRules());
 
         $validated['tenant_id'] = $validated['tenant_id'] ?? $tenantId;
+        $this->ensureNotDuplicate($validated, (int) $validated['tenant_id']);
         $route = FlightRoute::create($validated);
         $route->load(['originAirport', 'destinationAirport']);
 
         return ApiResponse::created($route, message: 'Flight route created successfully');
+    }
+
+    /**
+     * Public: the dates an active route flies between two airports, for the
+     * customer calendar. Dates inside the tenant's minimum advance booking
+     * window are left out, matching what search will actually return.
+     */
+    public function flyingDates(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'origin' => ['required', 'string', 'size:3'],
+            'destination' => ['required', 'string', 'size:3'],
+        ]);
+
+        $tenantId = $request->user()?->tenant_id
+            ?? $request->attributes->get('tenant_id')
+            ?? $request->attributes->get('tenant')?->id
+            ?? $request->header('X-Tenant-ID')
+            ?? $request->query('tenant_id');
+        abort_unless($tenantId, 400, 'A tenant identifier is required to load flight dates.');
+
+        $tenant = Tenant::query()->withoutGlobalScopes()->findOrFail((int) $tenantId);
+        $minDays = max(0, (int) data_get($tenant->settings, 'flight_booking.minimum_advance_booking_days', 0));
+        $airport = fn (string $code) => fn ($query) => $query->withoutGlobalScopes()->where('iata_code', strtoupper($code));
+
+        $dates = FlightRoute::query()
+            ->withoutGlobalScopes()
+            ->where('tenant_id', $tenant->id)
+            ->where('is_active', true)
+            ->whereHas('originAirport', $airport($data['origin']))
+            ->whereHas('destinationAirport', $airport($data['destination']))
+            ->whereDate('flight_date', '>=', now()->startOfDay()->addDays($minDays))
+            ->orderBy('flight_date')
+            ->pluck('flight_date')
+            ->map(fn ($date) => Carbon::parse($date)->toDateString())
+            ->unique()
+            ->values();
+
+        return ApiResponse::success(['dates' => $dates]);
     }
 
     /**
@@ -87,6 +130,9 @@ class FlightRouteController extends Controller
             'is_active' => ['nullable', 'boolean'],
         ] + $this->flightDetailsRules());
 
+        $this->ensureNotDuplicate(array_merge($route->only([
+            'flight_number', 'origin_airport_id', 'destination_airport_id', 'flight_date', 'flight_time',
+        ]), $validated), (int) $route->tenant_id, $route->id);
         $route->update($validated);
         $route->load(['originAirport', 'destinationAirport']);
 
@@ -197,6 +243,40 @@ class FlightRouteController extends Controller
      * Flight data entered on the route form. Nullable rules keep existing
      * clients that only send airport pairs compatible with this endpoint.
      */
+    /**
+     * One route per flight number, airport pair and departure date + time.
+     */
+    private function ensureNotDuplicate(array $attributes, int $tenantId, ?int $ignoreId = null): void
+    {
+        $flightNumber = strtoupper(trim((string) ($attributes['flight_number'] ?? '')));
+        $flightDate = $attributes['flight_date'] ?? null;
+        $flightTime = $attributes['flight_time'] ?? null;
+        if ($flightNumber === '' || ! $flightDate || ! $flightTime) {
+            return;
+        }
+
+        // The model may hand back a Carbon date; the column is TIME, so compare as
+        // HH:MM:SS whether "02:10" or "02:10:00" was sent.
+        $flightDate = Carbon::parse($flightDate)->toDateString();
+        $flightTime = strlen((string) $flightTime) === 5 ? "{$flightTime}:00" : (string) $flightTime;
+
+        $exists = FlightRoute::query()
+            ->where('tenant_id', $tenantId)
+            ->whereRaw('UPPER(TRIM(flight_number)) = ?', [$flightNumber])
+            ->where('origin_airport_id', $attributes['origin_airport_id'] ?? null)
+            ->where('destination_airport_id', $attributes['destination_airport_id'] ?? null)
+            ->whereDate('flight_date', $flightDate)
+            ->where('flight_time', $flightTime)
+            ->when($ignoreId, fn ($query) => $query->whereKeyNot($ignoreId))
+            ->exists();
+
+        if ($exists) {
+            throw ValidationException::withMessages([
+                'flight_number' => "A route for {$flightNumber} on {$flightDate} at ".substr($flightTime, 0, 5).' between these airports already exists.',
+            ]);
+        }
+    }
+
     private function flightDetailsRules(): array
     {
         return [
