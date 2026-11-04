@@ -23,7 +23,7 @@
     <h1>{{ $tenant->name }}</h1>
     <p>{{ $message }}</p>
     <span class="status">Restaurant access suspended</span>
-    <div class="help">Restaurant owners can contact their NexDine administrator to restore access.</div>
+    <div class="help">Restaurant owners can contact their CRT Travels administrator to restore access.</div>
 </main>
 </body>
 </html>

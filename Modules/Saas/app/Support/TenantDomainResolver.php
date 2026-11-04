@@ -31,6 +31,32 @@ class TenantDomainResolver
             ->first();
     }
 
+    /**
+     * The agency a public (signed-out) visitor's site belongs to. Same as
+     * resolve(), plus an agency whose saved domain is the platform's own
+     * domain: resolve() skips central hosts so the platform console is never
+     * pinned to a tenant, but that agency's public site is still its own.
+     * Falls back to FLIGHT_PUBLIC_BRAND_TENANT_ID when no tenant has claimed
+     * the domain.
+     */
+    public function publicSiteTenantId(Request $request): ?int
+    {
+        if ($tenant = $this->resolve($request)) {
+            return $tenant->id;
+        }
+
+        $candidate = $this->candidateHost($request);
+        $claimedBy = $candidate === null ? null : Tenant::query()
+            ->withoutGlobalScopes()
+            ->where('is_active', true)
+            ->where('domain', $candidate)
+            ->value('id');
+
+        $brandTenantId = (int) config('flight.public_brand_tenant_id');
+
+        return $claimedBy ?? ($brandTenantId > 0 ? $brandTenantId : null);
+    }
+
     private function candidateHost(Request $request): ?string
     {
         $headerHost = $this->normalizeHost($request->header('X-NexDine-Tenant-Domain'));

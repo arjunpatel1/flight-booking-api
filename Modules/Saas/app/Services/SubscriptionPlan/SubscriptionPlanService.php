@@ -73,8 +73,8 @@ class SubscriptionPlanService implements SubscriptionPlanServiceInterface
         return [
             'billing_cycles' => $this->billingCycles(),
             'access_scopes' => [
-                ['id' => 'branch', 'name' => 'Single branch'],
-                ['id' => 'tenant', 'name' => 'Whole restaurant / multi-branch'],
+                ['id' => 'branch', 'name' => 'Single branch (one office)'],
+                ['id' => 'tenant', 'name' => 'Whole tenant (all branches)'],
             ],
             'features' => collect(config('saas.default_features', []))
                 ->merge(config('saas.enterprise_features', []))

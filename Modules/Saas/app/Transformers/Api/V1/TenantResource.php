@@ -57,6 +57,7 @@ class TenantResource extends JsonResource
             'users_count' => $this->users_count ?? 0,
             'subscriptions_count' => $this->subscriptions_count ?? $this->whenLoaded('subscriptions', fn () => $this->subscriptions->count()),
             'branches' => $this->branchesPayload(),
+            'primary_branch_name' => $this->whenLoaded('branches', fn () => $this->primaryBranch()?->name),
             'users' => $this->usersPayload(),
             'subscriptions' => $this->subscriptionsPayload(),
             'feature_limits' => $this->featureLimitsPayload(),

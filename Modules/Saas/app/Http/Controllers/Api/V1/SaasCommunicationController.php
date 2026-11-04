@@ -93,7 +93,7 @@ class SaasCommunicationController extends Controller
                     'sent_by' => $request->user()?->id,
                     'thread_reference' => $data['thread_reference'] ?? (string) Str::uuid(),
                     'restaurant_name' => config('app.name', 'NexDine'),
-                    'logo_url' => config('saas.company_mail.logo_url') ?: rtrim((string) config('app.url'), '/').'/logo.svg',
+                    'logo_url' => config('saas.company_mail.logo_url') ?: rtrim((string) config('app.url'), '/').'/logo.png',
                     'primary_color' => config('saas.company_mail.primary_color'),
                     'attachments' => $storedAttachments,
                     'read_at' => now()->toIso8601String(),

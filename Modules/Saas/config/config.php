@@ -85,6 +85,10 @@ return [
     ],
     'enterprise_features' => [
         'flight_booking',
+        'flight_coupons',
+        'flight_b2b_network',
+        'flight_commission',
+        'flight_wallet',
         'pos',
         'kitchen',
         'qr_ordering',

@@ -22,6 +22,7 @@ use Modules\Saas\Http\Controllers\Api\V1\SaasLaunchReadinessController;
 use Modules\Saas\Http\Controllers\Api\V1\SaasOnboardingInviteController;
 use Modules\Saas\Http\Controllers\Api\V1\SaasOnboardingRequestController;
 use Modules\Saas\Http\Controllers\Api\V1\SaasOperationsCenterController;
+use Modules\Saas\Http\Controllers\Api\V1\SaasGeoController;
 use Modules\Saas\Http\Controllers\Api\V1\SaasOperationsController;
 use Modules\Saas\Http\Controllers\Api\V1\SaasSecurityController;
 use Modules\Saas\Http\Controllers\Api\V1\SaasServerControlController;
@@ -102,6 +103,8 @@ Route::post('/saas/billing/webhooks/stripe', [SaasBillingWebhookController::clas
     ->middleware('throttle:120,1');
 
 Route::middleware(EnsurePlatformActor::class)->group(function () {
+    Route::get('/saas/geo/countries', [SaasGeoController::class, 'countries'])->middleware('can:admin.saas.index');
+    Route::get('/saas/geo/countries/{code}/states', [SaasGeoController::class, 'states'])->where('code', '[A-Za-z]{2}')->middleware('can:admin.saas.index');
     Route::controller(SaasOperationsController::class)
         ->prefix('saas')
         ->group(function () {

@@ -46,6 +46,7 @@ class FlightSubscriptionQuotaService
             'currency'      => 'USD',
             'features'      => [
                 'flight_booking',
+                'flight_coupons',
                 'flight_inventory',
                 'flight_schedules',
             ],
@@ -71,6 +72,7 @@ class FlightSubscriptionQuotaService
             'currency'      => 'USD',
             'features'      => [
                 'flight_booking',
+                'flight_coupons',
                 'flight_inventory',
                 'flight_schedules',
                 'flight_fares',
@@ -106,6 +108,7 @@ class FlightSubscriptionQuotaService
             'currency'      => 'USD',
             'features'      => [
                 'flight_booking',
+                'flight_coupons',
                 'flight_inventory',
                 'flight_schedules',
                 'flight_fares',
@@ -134,13 +137,16 @@ class FlightSubscriptionQuotaService
 
     /**
      * Ensure Starter, Pro, and Enterprise plans exist in the database.
+     * Only missing plans are created: once a plan exists, the platform admin
+     * owns its name, price, features and status (Plans page), so this must
+     * never write the defaults back over those edits.
      */
     public function seedPlans(): array
     {
         $seeded = [];
 
         foreach (self::PLANS as $code => $definition) {
-            $plan = SubscriptionPlan::updateOrCreate(
+            $plan = SubscriptionPlan::query()->withoutGlobalScopes()->firstOrCreate(
                 ['code' => $code],
                 [
                     'name'          => $definition['name'],
@@ -148,7 +154,7 @@ class FlightSubscriptionQuotaService
                     'billing_cycle' => $definition['billing_cycle'],
                     'price'         => $definition['price'],
                     'currency'      => $definition['currency'],
-                    'access_scope'  => 'global',
+                    'access_scope'  => 'tenant',
                     'features'      => $definition['features'],
                     'limits'        => $definition['limits'],
                     'is_active'     => true,

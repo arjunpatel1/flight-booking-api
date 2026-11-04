@@ -94,6 +94,23 @@ class Tenant extends Model
         return $this->hasMany(Branch::class);
     }
 
+    /**
+     * The head office: the branch the tenant owner (first user) belongs to,
+     * else the oldest branch. Uses already-loaded relations when present.
+     */
+    public function primaryBranch(): ?Branch
+    {
+        $ownerBranchId = ($this->relationLoaded('users')
+            ? $this->users->sortBy('id')->first()
+            : $this->users()->withoutGlobalScopes()->oldest('id')->first(['id', 'branch_id']))?->branch_id;
+
+        $branches = $this->relationLoaded('branches')
+            ? $this->branches->sortBy('id')
+            : $this->branches()->withoutGlobalScopes()->oldest('id')->get();
+
+        return $branches->firstWhere('id', $ownerBranchId) ?? $branches->first();
+    }
+
     public function subscriptions(): HasMany
     {
         return $this->hasMany(TenantSubscription::class);
