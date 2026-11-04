@@ -50,142 +50,43 @@ class FlightSubscriptionController extends Controller
     }
 
     /**
-     * Subscribe tenant to a plan.
-     * POST /api/v1/flight/subscriptions/subscribe
+     * Plans are assigned by the platform (Tenant Subscriptions), never by the
+     * tenant itself: these endpoints used to let a tenant subscribe, switch,
+     * renew or cancel its own plan without any payment.
+     * POST /api/v1/flight/subscriptions/{subscribe|upgrade|downgrade|renew|cancel}
      */
-    public function subscribe(Request $request): JsonResponse
+    public function subscribe(): JsonResponse
     {
-        $request->validate([
-            'plan_code'       => 'required|string',
-            'duration_months' => 'sometimes|integer|min:1|max:36',
-        ]);
-
-        $tenantId = $this->resolveTenantId($request);
-        if (! $tenantId) {
-            return ApiResponse::errors(null, 'Tenant context is required.', 400);
-        }
-
-        try {
-            $subscription = $this->subscriptionService->subscribe(
-                tenant: $tenantId,
-                planCode: $request->string('plan_code'),
-                options: ['duration_months' => $request->integer('duration_months', 1)]
-            );
-
-            return ApiResponse::success([
-                'subscription' => $subscription,
-                'summary'      => $this->subscriptionService->getSummary($tenantId),
-            ], 'Subscribed successfully.', 201);
-        } catch (InvalidPlanException $e) {
-            return ApiResponse::errors(null, $e->getMessage(), 404);
-        } catch (Exception $e) {
-            return ApiResponse::errors(null, $e->getMessage(), 422);
-        }
+        return $this->planChangesAreManagedByPlatform();
     }
 
-    /**
-     * Upgrade subscription to a higher tier.
-     * POST /api/v1/flight/subscriptions/upgrade
-     */
-    public function upgrade(Request $request): JsonResponse
+    public function upgrade(): JsonResponse
     {
-        $request->validate([
-            'plan_code' => 'required|string',
-        ]);
-
-        $tenantId = $this->resolveTenantId($request);
-        if (! $tenantId) {
-            return ApiResponse::errors(null, 'Tenant context is required.', 400);
-        }
-
-        try {
-            $subscription = $this->subscriptionService->upgrade($tenantId, $request->string('plan_code'));
-
-            return ApiResponse::success([
-                'subscription' => $subscription,
-                'summary'      => $this->subscriptionService->getSummary($tenantId),
-            ], 'Subscription upgraded successfully.');
-        } catch (InvalidPlanException $e) {
-            return ApiResponse::errors(null, $e->getMessage(), 404);
-        } catch (Exception $e) {
-            return ApiResponse::errors(null, $e->getMessage(), 422);
-        }
+        return $this->planChangesAreManagedByPlatform();
     }
 
-    /**
-     * Downgrade subscription to a lower tier.
-     * POST /api/v1/flight/subscriptions/downgrade
-     */
-    public function downgrade(Request $request): JsonResponse
+    public function downgrade(): JsonResponse
     {
-        $request->validate([
-            'plan_code' => 'required|string',
-        ]);
-
-        $tenantId = $this->resolveTenantId($request);
-        if (! $tenantId) {
-            return ApiResponse::errors(null, 'Tenant context is required.', 400);
-        }
-
-        try {
-            $subscription = $this->subscriptionService->downgrade($tenantId, $request->string('plan_code'));
-
-            return ApiResponse::success([
-                'subscription' => $subscription,
-                'summary'      => $this->subscriptionService->getSummary($tenantId),
-            ], 'Subscription downgraded successfully.');
-        } catch (InvalidPlanException $e) {
-            return ApiResponse::errors(null, $e->getMessage(), 404);
-        } catch (Exception $e) {
-            return ApiResponse::errors(null, $e->getMessage(), 422);
-        }
+        return $this->planChangesAreManagedByPlatform();
     }
 
-    /**
-     * Renew subscription.
-     * POST /api/v1/flight/subscriptions/renew
-     */
-    public function renew(Request $request): JsonResponse
+    public function renew(): JsonResponse
     {
-        $tenantId = $this->resolveTenantId($request);
-        if (! $tenantId) {
-            return ApiResponse::errors(null, 'Tenant context is required.', 400);
-        }
-
-        try {
-            $subscription = $this->subscriptionService->renew($tenantId);
-
-            return ApiResponse::success([
-                'subscription' => $subscription,
-                'summary'      => $this->subscriptionService->getSummary($tenantId),
-            ], 'Subscription renewed successfully.');
-        } catch (SubscriptionExpiredException $e) {
-            return ApiResponse::errors(null, $e->getMessage(), 400);
-        } catch (Exception $e) {
-            return ApiResponse::errors(null, $e->getMessage(), 422);
-        }
+        return $this->planChangesAreManagedByPlatform();
     }
 
-    /**
-     * Cancel subscription.
-     * POST /api/v1/flight/subscriptions/cancel
-     */
-    public function cancel(Request $request): JsonResponse
+    public function cancel(): JsonResponse
     {
-        $tenantId = $this->resolveTenantId($request);
-        if (! $tenantId) {
-            return ApiResponse::errors(null, 'Tenant context is required.', 400);
-        }
+        return $this->planChangesAreManagedByPlatform();
+    }
 
-        try {
-            $subscription = $this->subscriptionService->cancel($tenantId);
-
-            return ApiResponse::success([
-                'subscription' => $subscription,
-            ], 'Subscription cancelled successfully.');
-        } catch (Exception $e) {
-            return ApiResponse::errors(null, $e->getMessage(), 422);
-        }
+    protected function planChangesAreManagedByPlatform(): JsonResponse
+    {
+        return ApiResponse::errors(
+            null,
+            'Plan changes are managed by CRT Travels. Use "Request Upgrade" on your profile page to ask for a different plan or a renewal.',
+            403
+        );
     }
 
     /**

@@ -114,7 +114,9 @@ class EffectiveTenantEntitlementService
         }
 
         if ($features->intersect([
+            'flight_coupons',
             'flight_b2b_network',
+            'flight_commission',
             'flight_wallet',
             'flight_inventory',
             'flight_schedules',

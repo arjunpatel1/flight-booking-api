@@ -9,7 +9,7 @@ return [
         'verified' => 'Activation key verified.',
     ],
     'welcome' => [
-        'subject' => 'Welcome to NexDine, :restaurant',
+        'subject' => 'Welcome to CRT Travels, :restaurant',
     ],
 
     // Frontend tenant control-center UI (Show.vue and its panels).
@@ -124,7 +124,7 @@ return [
         ],
         'journey' => [
             'title' => 'Onboarding journey',
-            'intro' => 'Complete each step to fully set up the flight booking tenant. NexDine handles the technical setup automatically.',
+            'intro' => 'Complete each step to fully set up the flight booking tenant. CRT Travels handles the technical setup automatically.',
             'next' => 'Next',
             'state_done' => 'Complete',
             'state_working' => 'In progress',
@@ -288,7 +288,7 @@ return [
             'restaurant' => 'Restaurant',
             'branch' => 'Branch',
             'api_base_url' => 'API Base URL',
-            'restaurant_url' => 'Restaurant URL',
+            'restaurant_url' => 'Tenant URL',
             'reverb_host' => 'Reverb Host',
             'reverb_port' => 'Reverb Port',
             'theme' => 'Theme',

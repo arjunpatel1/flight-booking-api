@@ -12,6 +12,7 @@ use Modules\Notification\Services\NotificationServiceInterface;
 use Modules\Saas\Models\SaasBillingInvoice;
 use Modules\Saas\Models\SubscriptionPlan;
 use Modules\Saas\Models\TenantPlanUpgradeRequest;
+use Modules\Saas\Models\TenantSubscription;
 use Modules\Saas\Services\Entitlements\EffectiveTenantEntitlementService;
 use Modules\Saas\Traits\ResolvesCurrentTenant;
 use Modules\Support\ApiResponse;
@@ -103,6 +104,7 @@ class TenantBillingController extends Controller
             abort_unless($item->status === 'pending', 409, 'Only pending requests can be decided.');
             $item->update(['status' => $data['status'], 'decision_note' => $data['note'], 'decided_by' => $request->user()->id, 'decided_at' => now()]);
             DB::table('tenant_plan_upgrade_request_events')->insert(['tenant_plan_upgrade_request_id' => $item->id, 'actor_id' => $request->user()->id, 'from_status' => 'pending', 'to_status' => $data['status'], 'note' => $data['note'], 'created_at' => now()]);
+            if ($item->status === 'approved') $this->applyApprovedPlan($item, $request->user());
             return $item;
         });
         activity('subscription')->performedOn($item)->causedBy($request->user())->withProperties(['tenant_id' => $item->tenant_id, 'status' => $item->status])->log('Plan upgrade request decided');
@@ -119,6 +121,19 @@ class TenantBillingController extends Controller
         return ApiResponse::success(['uuid' => $item->uuid, 'status' => $item->status], 'Upgrade request updated.');
     }
 
+    // Approving a request switches the tenant's current subscription to the
+    // requested plan (or starts one), the same way the tenant registry's
+    // "Assign plan" action does; otherwise approval changed nothing.
+    private function applyApprovedPlan(TenantPlanUpgradeRequest $item, User $actor): void
+    {
+        $subscription = TenantSubscription::query()->withoutGlobalScopes()->where('tenant_id', $item->tenant_id)
+            ->whereIn('status', ['trial', 'active', 'past_due'])->latest()->first();
+        if ($subscription) $subscription->update(['subscription_plan_id' => $item->requested_plan_id]);
+        else $subscription = TenantSubscription::query()->withoutGlobalScopes()->create(['tenant_id' => $item->tenant_id, 'subscription_plan_id' => $item->requested_plan_id, 'status' => 'active', 'starts_at' => now()]);
+        activity('saas_subscription')->event('plan_assigned')->causedBy($actor)->performedOn($subscription)
+            ->withProperties(['tenant_id' => $item->tenant_id, 'subscription_plan_id' => $item->requested_plan_id, 'upgrade_request_uuid' => $item->uuid])->log('Subscription plan assigned from an approved upgrade request.');
+    }
+
     private function notifyAdmin(TenantPlanUpgradeRequest $upgrade): void
     {
         User::query()->withoutGlobalScopes()->permission('admin.saas.manage')->each(function (User $administrator) use ($upgrade): void {
@@ -133,6 +148,6 @@ class TenantBillingController extends Controller
         });
         $email = config('saas.workspace.support.email');
         if (! $email) return;
-        try { Mail::raw("Tenant #{$upgrade->tenant_id} requested plan #{$upgrade->requested_plan_id}. Reference: {$upgrade->uuid}", fn ($message) => $message->to($email)->subject('NexDine plan upgrade request')); } catch (\Throwable $exception) { report($exception); }
+        try { Mail::raw("Tenant #{$upgrade->tenant_id} requested plan #{$upgrade->requested_plan_id}. Reference: {$upgrade->uuid}", fn ($message) => $message->to($email)->subject('CRT Travels plan upgrade request')); } catch (\Throwable $exception) { report($exception); }
     }
 }

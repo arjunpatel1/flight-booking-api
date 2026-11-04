@@ -11,13 +11,13 @@
 <div style="{{ $wrap }}">
   <div style="{{ $card }}">
     <div style="background:#0f172a;padding:22px 28px;">
-      <span style="color:#ffffff;font-size:19px;font-weight:700;letter-spacing:-.3px;">NexDine</span>
+      <span style="color:#ffffff;font-size:19px;font-weight:700;letter-spacing:-.3px;">CRT Travels</span>
     </div>
 
     <div style="{{ $pad }}">
       <h1 style="{{ $h }}">Welcome, {{ $tenant->name }}</h1>
       <p style="{{ $muted }}">
-        Your restaurant is live on NexDine. Everything below gets you from here
+        Your restaurant is live on CRT Travels. Everything below gets you from here
         to taking your first order.
       </p>
 
@@ -93,7 +93,7 @@
 
     <div style="padding:18px 28px 24px;border-top:1px solid #e2e8f0;">
       <p style="margin:0;font-size:12px;color:#94a3b8;line-height:1.6;">
-        You received this because a NexDine restaurant was activated for
+        You received this because a CRT Travels restaurant was activated for
         {{ $tenant->name }}.
       </p>
     </div>

@@ -108,17 +108,21 @@ class SettingService implements SettingServiceInterface
     }
 
     /**
-     * Logo, loader logo and favicon URLs of the public brand agency, for a
-     * visitor with no tenant: not signed in and not on an agency domain.
-     * Null when no brand agency is configured or a tenant is already known.
+     * Logo, loader logo and favicon URLs of the agency whose public site this
+     * is, for a visitor with no tenant: not signed in and on the platform
+     * domain (TenantDomainResolver::publicSiteTenantId). Null when no agency
+     * owns the site or a tenant is already known.
      *
      * @return array{logo: ?string, loader_logo: ?string, favicon: ?string}|null
      */
     private function publicBrandLogos(): ?array
     {
-        $tenantId = (int) config('flight.public_brand_tenant_id');
         $context = app(\Modules\Saas\Support\TenantContext::class);
-        if ($tenantId <= 0 || $context->id() || auth()->check()) {
+        if ($context->id() || auth()->check()) {
+            return null;
+        }
+        $tenantId = (int) app(\Modules\Saas\Support\TenantDomainResolver::class)->publicSiteTenantId(request());
+        if ($tenantId <= 0) {
             return null;
         }
 

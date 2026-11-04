@@ -149,7 +149,7 @@ Route::prefix('flight')->group(function () {
 
     // ── Flight coupons & discounts (admin, per tenant) ──────────────────
     foreach (['coupons' => 'coupon', 'discounts' => 'discount'] as $path => $kind) {
-        Route::prefix('/'.$path)->controller(FlightOfferAdminController::class)->group(function () use ($kind) {
+        Route::prefix('/'.$path)->middleware('tenant.feature:flight_coupons')->controller(FlightOfferAdminController::class)->group(function () use ($kind) {
             Route::get('/', 'index')->defaults('kind', $kind)->middleware('can:admin.vouchers.index');
             Route::get('/form/meta', 'formMeta')->defaults('kind', $kind)->middleware('permission:admin.vouchers.edit|admin.vouchers.create');
             Route::get('/{id}', 'show')->defaults('kind', $kind)->whereNumber('id')->middleware('permission:admin.vouchers.show|admin.vouchers.edit');
@@ -167,6 +167,7 @@ Route::prefix('flight')->group(function () {
     Route::put('/settings/refund-policy', [FlightBookingSettingsController::class, 'updateRefundPolicy']);
     Route::put('/configuration/{key}', [FlightBookingSettingsController::class, 'updateConfiguration']);
 
+    Route::get('/timezones', [FlightAirportController::class, 'timezones']);
     Route::post('/airports', [FlightAirportController::class, 'store']);
     Route::put('/airports/{identifier}', [FlightAirportController::class, 'update']);
     Route::delete('/airports/{identifier}', [FlightAirportController::class, 'destroy']);
@@ -252,6 +253,7 @@ Route::prefix('flight')->group(function () {
     Route::post('/suppliers/{id}/mappings', [FlightSupplierController::class, 'storeMapping']);
 
     // â”€â”€ Phase 7: Commission Engine + Commission Rules â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    Route::middleware('tenant.feature:flight_commission')->group(function () {
     Route::get('/commission-rules', [FlightCommissionRuleController::class, 'index']);
     Route::post('/commission-rules', [FlightCommissionRuleController::class, 'store']);
     Route::get('/commission-rules/{id}', [FlightCommissionRuleController::class, 'show']);
@@ -259,8 +261,10 @@ Route::prefix('flight')->group(function () {
     Route::delete('/commission-rules/{id}', [FlightCommissionRuleController::class, 'destroy']);
     Route::post('/commission/calculate', [FlightCommissionRuleController::class, 'calculate']);
     Route::get('/commission/logs', [FlightCommissionRuleController::class, 'logs']);
+    });
 
     // â”€â”€ Phase 8: B2B Distributor + Agent Network â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    Route::middleware('tenant.feature:flight_b2b_network')->group(function () {
     Route::get('/b2b/hierarchy', [FlightB2BController::class, 'hierarchy']);
 
     // Tenant Admin: Distributors
@@ -292,8 +296,10 @@ Route::prefix('flight')->group(function () {
     Route::get('/b2b/inventory', [FlightB2BController::class, 'b2bInventory']);
     Route::post('/b2b/bookings/{identifier}/pay-wallet', [FlightB2BController::class, 'b2bPayWallet']);
     Route::post('/b2b/bookings/{identifier}/cancel', [FlightB2BController::class, 'b2bCancelBooking']);
+    });
 
     // â”€â”€ Phase 9: Wallet + Double-Entry Ledger + Credit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    Route::middleware('tenant.feature:flight_wallet')->group(function () {
     Route::get('/wallets/workspace', [FlightWalletController::class, 'workspace']);
     Route::get('/wallets/tenant', [FlightWalletController::class, 'tenantWallet']);
     Route::get('/wallets/ledger/consistency', [FlightWalletController::class, 'verifyLedger']);
@@ -312,6 +318,7 @@ Route::prefix('flight')->group(function () {
     Route::post('/wallets/{id}/credit-limit', [FlightWalletController::class, 'adjustCreditLimit']);
     Route::get('/wallets/{id}/transactions', [FlightWalletController::class, 'transactions']);
     Route::get('/wallets/{id}/ledger', [FlightWalletController::class, 'ledgerEntries']);
+    });
 
     // â”€â”€ Phase 10: Subscription + Quotas + Overage â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     Route::get('/subscriptions/workspace', [FlightSubscriptionController::class, 'workspace']);
@@ -338,6 +345,7 @@ Route::prefix('flight')->group(function () {
     Route::post('/bookings/{identifier}/pay-wallet', [FlightPaymentController::class, 'payWithWallet']);
 
     // â”€â”€ Phase 18: Commission Settlement + 4-Way Reconciliation + Audit Reports â”€
+    Route::middleware('tenant.feature:flight_commission')->group(function () {
     Route::get('/settlements/workspace', [FlightSettlementController::class, 'workspace']);
     Route::get('/settlements/batches', [FlightSettlementController::class, 'indexBatches']);
     Route::post('/settlements/batches', [FlightSettlementController::class, 'createBatch']);
@@ -350,6 +358,7 @@ Route::prefix('flight')->group(function () {
     Route::post('/settlements/mismatches/{id}/resolve', [FlightSettlementController::class, 'resolveMismatch']);
     Route::get('/settlements/audit-reports', [FlightSettlementController::class, 'indexAuditReports']);
     Route::get('/settlements/audit-reports/{id}', [FlightSettlementController::class, 'showAuditReport']);
+    });
 
     // â”€â”€ Phase 21: Notifications Delivery & Webhooks Oversight â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     Route::get('/notifications', [FlightNotificationController::class, 'indexNotifications']);

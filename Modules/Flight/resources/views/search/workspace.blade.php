@@ -568,7 +568,7 @@
         <header class="header">
             <div>
                 <h1 class="brand-title">
-                    <span>✈️ NexDine Global Flight Engine</span>
+                    <span>✈️ CRT Travels Global Flight Engine</span>
                 </h1>
                 <p style="color: var(--text-muted); font-size: 13px; margin-top: 4px;">
                     Enterprise Internal Flight Inventory & Multi-Supplier Aggregation Network

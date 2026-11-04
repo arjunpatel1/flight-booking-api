@@ -34,7 +34,7 @@ class SendTenantMailboxMessageJob implements ShouldQueue
             (string) ($message->body_text ?? ''),
             (string) ($message->body_html ?? ''),
             (string) config('saas.company_mail.brand_name', config('app.name', 'NexDine')),
-            (string) (config('saas.company_mail.logo_url') ?: rtrim((string) config('app.url'), '/').'/logo.svg'),
+            (string) (config('saas.company_mail.logo_url') ?: rtrim((string) config('app.url'), '/').'/logo.png'),
             (string) config('saas.company_mail.primary_color', '#F57C00'),
         );
         // The tenant's own server when connected, otherwise the platform's Mailgun.

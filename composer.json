@@ -15,6 +15,7 @@
         "ext-iconv": "*",
         "ext-intl": "*",
         "cache/predis-adapter": "^1.2",
+        "commerceguys/addressing": "^2.2",
         "firebase/php-jwt": "^7.1",
         "intervention/image": "^4.1",
         "jackiedo/dotenv-editor": "^1.1",

@@ -2,11 +2,13 @@
 
 namespace Modules\Flight\Http\Controllers\Api\V1;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Modules\Core\Http\Controllers\Controller;
 use Modules\Flight\Models\FlightAirport;
 use Modules\Flight\Services\Catalog\FlightCatalogTenant;
+use Modules\Flight\Services\Catalog\TimezoneCatalog;
 use Modules\Support\ApiResponse;
 
 class FlightAirportController extends Controller
@@ -16,7 +18,7 @@ class FlightAirportController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $query = FlightAirport::ownedByCatalog();
+        $query = $this->directory();
 
         if ($request->boolean('active_only', false)) {
             $query->where('is_active', true);
@@ -36,9 +38,22 @@ class FlightAirportController extends Controller
     }
 
     /**
+     * Time zones for the airport form, from PHP's time zone database.
+     * GET /api/v1/flight/timezones
+     */
+    public function timezones(TimezoneCatalog $timezones): JsonResponse
+    {
+        return ApiResponse::success([
+            'zones' => $timezones->all(),
+            'by_country' => $timezones->byCountry(),
+            'version' => $timezones->version(),
+        ]);
+    }
+
+    /**
      * Store a new airport.
      */
-    public function store(Request $request): JsonResponse
+    public function store(Request $request, TimezoneCatalog $timezones): JsonResponse
     {
         $validated = $request->validate([
             'iata_code' => ['required', 'string', 'size:3', FlightCatalogTenant::unique('flight_airports', 'iata_code')],
@@ -59,6 +74,7 @@ class FlightAirportController extends Controller
         $validated['iata_code'] = strtoupper($validated['iata_code']);
         $validated['city_code'] = strtoupper($validated['city_code']);
         $validated['country_code'] = strtoupper($validated['country_code']);
+        $validated['timezone'] = $timezones->current($validated['timezone']);
 
         if (isset($validated['terminals'])) {
             $validated['terminals'] = $this->sanitizeTerminals($validated['terminals']);
@@ -75,8 +91,8 @@ class FlightAirportController extends Controller
     public function show(string $identifier): JsonResponse
     {
         $airport = is_numeric($identifier)
-            ? FlightAirport::ownedByCatalog()->findOrFail($identifier)
-            : FlightAirport::ownedByCatalog()->where('iata_code', strtoupper($identifier))->firstOrFail();
+            ? $this->directory()->findOrFail($identifier)
+            : $this->directory()->where('iata_code', strtoupper($identifier))->firstOrFail();
 
         return ApiResponse::success($airport);
     }
@@ -84,7 +100,7 @@ class FlightAirportController extends Controller
     /**
      * Update an existing airport.
      */
-    public function update(Request $request, string $identifier): JsonResponse
+    public function update(Request $request, TimezoneCatalog $timezones, string $identifier): JsonResponse
     {
         $airport = is_numeric($identifier)
             ? FlightAirport::ownedByCatalog()->findOrFail($identifier)
@@ -110,6 +126,9 @@ class FlightAirportController extends Controller
         if (isset($validated['country_code'])) {
             $validated['country_code'] = strtoupper($validated['country_code']);
         }
+        if (isset($validated['timezone'])) {
+            $validated['timezone'] = $timezones->current($validated['timezone']);
+        }
         if (array_key_exists('terminals', $validated)) {
             $validated['terminals'] = $this->sanitizeTerminals($validated['terminals']);
         }
@@ -131,6 +150,19 @@ class FlightAirportController extends Controller
         $airport->delete();
 
         return ApiResponse::success(null, 'Airport deleted successfully');
+    }
+
+    /**
+     * Airports the current request may read. The public portal only ever shows
+     * airports a tenant created, never the platform starter template.
+     */
+    protected function directory(): Builder
+    {
+        $query = FlightAirport::ownedByCatalog();
+
+        return FlightCatalogTenant::ownerId() === null && FlightCatalogTenant::isPublicVisitor()
+            ? $query->whereRaw('0 = 1')
+            : $query;
     }
 
     /**

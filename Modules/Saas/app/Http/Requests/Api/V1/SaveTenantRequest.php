@@ -24,6 +24,7 @@ class SaveTenantRequest extends FormRequest
             'owner_login_email' => ['nullable', 'email', 'max:255'],
             'owner_login_username' => ['nullable', 'string', 'max:120'],
             'owner_login_password' => ['nullable', 'string', 'min:8', 'max:255'],
+            'branch_name' => ['nullable', 'string', 'max:255'],
         ];
     }
 

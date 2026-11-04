@@ -5,6 +5,7 @@ namespace Modules\Flight\Services\Catalog;
 use Illuminate\Validation\Rules\Exists;
 use Illuminate\Validation\Rules\Unique;
 use Modules\Saas\Support\TenantContext;
+use Modules\Saas\Support\TenantDomainResolver;
 use Modules\User\Models\User;
 use Throwable;
 
@@ -20,7 +21,9 @@ use Throwable;
  *               (platform admins, console, cross-tenant public search). Used
  *               by the model global scope.
  *  - ownerId(): the catalog a directory screen manages. Same as id(), except
- *               that "unrestricted" means the starter template.
+ *               that "unrestricted" means the starter template for signed-in
+ *               platform admins, and for guests the agency whose saved domain the
+ *               site is on (TenantDomainResolver::publicSiteTenantId).
  */
 class FlightCatalogTenant
 {
@@ -43,7 +46,28 @@ class FlightCatalogTenant
 
     public static function ownerId(): ?int
     {
-        return self::id();
+        $id = self::id();
+        if ($id !== null) {
+            return $id;
+        }
+
+        // A public visitor on the platform domain has no tenant from the
+        // hostname, yet the public site belongs to the agency whose saved
+        // domain it is, so show that agency's airports and airlines rather
+        // than the starter template. Signed-in platform admins keep the template.
+        return self::isPublicVisitor() && app()->bound('request')
+            ? app(TenantDomainResolver::class)->publicSiteTenantId(request())
+            : null;
+    }
+
+    /** Guests and flight customers (a separate model), as opposed to staff accounts. */
+    public static function isPublicVisitor(): bool
+    {
+        try {
+            return ! auth()->user() instanceof User;
+        } catch (Throwable) {
+            return true;
+        }
     }
 
     /** `exists` rule restricted to the given (default: current) tenant's catalog. */

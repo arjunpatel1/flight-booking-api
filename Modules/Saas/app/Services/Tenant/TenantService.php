@@ -105,7 +105,9 @@ class TenantService implements TenantServiceInterface
             'password' => $data['owner_login_password'] ?? null,
         ];
 
-        unset($data['owner_login_email'], $data['owner_login_username'], $data['owner_login_password']);
+        $branchName = $data['branch_name'] ?? null;
+
+        unset($data['owner_login_email'], $data['owner_login_username'], $data['owner_login_password'], $data['branch_name']);
 
         $tenant->update([
             ...$data,
@@ -113,6 +115,10 @@ class TenantService implements TenantServiceInterface
         ]);
 
         $this->updateOwnerCredentials($tenant, $ownerCredentials);
+
+        if (filled($branchName) && ($branch = $tenant->primaryBranch())) {
+            $branch->update(['name' => ['en' => trim($branchName)]]);
+        }
 
         return $tenant->refresh();
     }
