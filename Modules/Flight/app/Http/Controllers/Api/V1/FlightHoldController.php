@@ -231,9 +231,24 @@ class FlightHoldController extends Controller
             $query->where('status', strtoupper($request->input('status')));
         }
 
+        if ($request->filled('search')) {
+            $search = trim((string) $request->input('search'));
+            $query->where(function ($q) use ($search) {
+                $q->whereLike('hold_id', "%{$search}%")
+                    ->orWhereLike('reference', "%{$search}%")
+                    ->orWhereLike('flight_inventory_id', "%{$search}%");
+            });
+        }
+
+        // Summary cards count every hold matching the table's filters, not just this page.
+        $summary = (clone $query)->reorder()->toBase()
+            ->selectRaw('status, COUNT(*) as total')
+            ->groupBy('status')
+            ->pluck('total', 'status');
+
         $holds = $query->paginate($request->input('per_page', 20));
 
-        return ApiResponse::success($holds, 'Flight holds retrieved successfully.');
+        return ApiResponse::success([...$holds->toArray(), 'summary' => $summary], 'Flight holds retrieved successfully.');
     }
 
     /**

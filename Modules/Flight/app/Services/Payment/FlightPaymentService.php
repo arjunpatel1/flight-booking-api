@@ -47,6 +47,11 @@ class FlightPaymentService
         // 1. Verify hold & quote validity
         $this->verifyBookingPayability($booking);
 
+        // A new attempt after a failed one is pending again until it has an outcome.
+        if ($booking->payment_status === PaymentStatus::FAILED) {
+            $booking->update(['payment_status' => PaymentStatus::PENDING]);
+        }
+
         // Keep the reservation alive while the customer is in the external
         // checkout window. The browser countdown is paused during this period.
         $hold = $booking->hold_id
@@ -225,17 +230,7 @@ class FlightPaymentService
                 'confirmed_at'      => now(),
             ]);
             app(\Modules\Flight\Services\Booking\FlightOfferService::class)->redeemForBooking($booking);
-
-            if ($booking->hold_id || $booking->hold_reference) {
-                $hold = FlightHold::where('id', $booking->hold_id)
-                    ->orWhere('hold_id', $booking->hold_reference)
-                    ->lockForUpdate()
-                    ->first();
-                if ($hold && $hold->status === HoldStatus::ACTIVE) {
-                    $hold->status = HoldStatus::CONVERTED;
-                    $hold->save();
-                }
-            }
+            app(\Modules\Flight\Services\Hold\FlightHoldService::class)->convertForPaidBooking($booking);
 
             // Emit Payment Confirmed event (Phase 16 will handle ticketing)
             event(new FlightPaymentConfirmed($payment, $booking));
@@ -454,16 +449,7 @@ class FlightPaymentService
                         'confirmed_at'      => now(),
                     ]);
                     app(\Modules\Flight\Services\Booking\FlightOfferService::class)->redeemForBooking($booking);
-                    if ($booking->hold_id || $booking->hold_reference) {
-                        $hold = FlightHold::where('id', $booking->hold_id)
-                            ->orWhere('hold_id', $booking->hold_reference)
-                            ->lockForUpdate()
-                            ->first();
-                        if ($hold && $hold->status === HoldStatus::ACTIVE) {
-                            $hold->status = HoldStatus::CONVERTED;
-                            $hold->save();
-                        }
-                    }
+                    app(\Modules\Flight\Services\Hold\FlightHoldService::class)->convertForPaidBooking($booking);
                     event(new FlightPaymentConfirmed($payment, $booking));
                 }
 
@@ -476,22 +462,63 @@ class FlightPaymentService
                         'failure_reason' => $payload['error']['description'] ?? 'Webhook reported payment failed.',
                     ]);
                 }
-                $booking = FlightBooking::whereKey($payment->flight_booking_id)->lockForUpdate()->first();
-                if ($booking && ($booking->hold_id || $booking->hold_reference)) {
-                    $hold = FlightHold::where('id', $booking->hold_id)
-                        ->orWhere('hold_id', $booking->hold_reference)
-                        ->lockForUpdate()
-                        ->first();
-                    if ($hold && $hold->status === HoldStatus::ACTIVE) {
-                        app(\Modules\Flight\Services\Hold\FlightHoldService::class)
-                            ->releaseHold($hold->id, 'Payment failed');
-                    }
-                }
+                $this->markBookingPaymentFailed($payment);
+
                 return ['status' => 'marked_failed', 'reference' => $payment->payment_reference];
             }
 
             return ['status' => 'processed', 'event' => $event];
         });
+    }
+
+    /**
+     * The gateway's checkout told the customer's browser that an attempt failed.
+     * Webhooks report this too, but they may arrive late or not be configured.
+     */
+    public function recordPaymentFailure(string $paymentReference, ?string $reason = null, ?Tenant $tenant = null): FlightPayment
+    {
+        return DB::transaction(function () use ($paymentReference, $reason, $tenant) {
+            $payment = FlightPayment::where('payment_reference', $paymentReference)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if ($tenant && $payment->tenant_id && $payment->tenant_id !== $tenant->id) {
+                throw new DomainException('Tenant mismatch on payment failure.');
+            }
+
+            if ($payment->status->canTransitionTo(FlightPaymentStatus::FAILED) && $payment->status !== FlightPaymentStatus::FAILED) {
+                $payment->transitionTo(FlightPaymentStatus::FAILED, [
+                    'failure_reason' => $reason ?: 'Customer checkout reported payment failed.',
+                ]);
+            }
+            if ($payment->status === FlightPaymentStatus::FAILED) {
+                $this->markBookingPaymentFailed($payment);
+            }
+
+            return $payment->refresh();
+        });
+    }
+
+    /** Show the failure on the booking and put its held seats back on sale. A retry can still pay. */
+    private function markBookingPaymentFailed(FlightPayment $payment): void
+    {
+        $booking = FlightBooking::whereKey($payment->flight_booking_id)->lockForUpdate()->first();
+        if (! $booking || in_array($booking->payment_status, [PaymentStatus::PAID, PaymentStatus::REFUNDED], true)) {
+            return;
+        }
+
+        $booking->update(['payment_status' => PaymentStatus::FAILED]);
+
+        if ($booking->hold_id || $booking->hold_reference) {
+            $hold = FlightHold::where('id', $booking->hold_id)
+                ->orWhere('hold_id', $booking->hold_reference)
+                ->lockForUpdate()
+                ->first();
+            if ($hold && $hold->status === HoldStatus::ACTIVE) {
+                app(\Modules\Flight\Services\Hold\FlightHoldService::class)
+                    ->releaseHold($hold->id, 'Payment failed');
+            }
+        }
     }
 
     /**

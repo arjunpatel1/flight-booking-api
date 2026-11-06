@@ -72,6 +72,27 @@ class FlightPaymentController extends Controller
     }
 
     /**
+     * The gateway checkout reported a failed attempt to the customer's browser.
+     * POST /api/v1/flight/payments/{reference}/failed
+     */
+    public function failed(Request $request, string $reference): JsonResponse
+    {
+        $data = $request->validate(['reason' => ['nullable', 'string', 'max:255']]);
+
+        try {
+            $payment = $this->paymentService->recordPaymentFailure(
+                $reference,
+                $data['reason'] ?? null,
+                $this->resolveTenant($request)
+            );
+
+            return ApiResponse::success(['payment_status' => $payment->status->value]);
+        } catch (DomainException $e) {
+            return ApiResponse::errors(null, $e->getMessage(), 422);
+        }
+    }
+
+    /**
      * Pay booking via B2B agent/distributor wallet (double-entry ledger debit).
      * POST /api/v1/flight/bookings/{identifier}/pay-wallet
      */
