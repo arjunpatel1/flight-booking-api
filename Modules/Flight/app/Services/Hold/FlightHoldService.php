@@ -440,6 +440,45 @@ class FlightHoldService
     }
 
     /**
+     * A booking was paid: its seats stay taken for good. Payment can succeed after
+     * the hold ended (timer ran out, or a failed attempt was retried), when its
+     * seats have already gone back on sale, so those are taken again here.
+     */
+    public function convertForPaidBooking(\Modules\Flight\Models\FlightBooking $booking): void
+    {
+        if (! $booking->hold_id && ! $booking->hold_reference) {
+            return;
+        }
+
+        $hold = FlightHold::where('id', $booking->hold_id)
+            ->orWhere('hold_id', $booking->hold_reference)
+            ->lockForUpdate()
+            ->first();
+        if (! $hold || $hold->status === HoldStatus::CONVERTED) {
+            return;
+        }
+
+        if ($hold->status !== HoldStatus::ACTIVE) {
+            $inventory = FlightInventory::lockForUpdate()->find($hold->flight_inventory_id);
+            $seats = $inventory ? min((int) $hold->quantity, max(0, (int) $inventory->available_seats)) : 0;
+            if ($seats > 0 && ! $hold->reservation_id) {
+                $inventory->decrement('available_seats', $seats);
+            }
+            if ($seats < (int) $hold->quantity || $hold->reservation_id) {
+                Log::warning('FlightHoldService: paid booking could not retake all its seats', [
+                    'booking' => $booking->booking_reference,
+                    'hold_id' => $hold->hold_id,
+                    'quantity' => $hold->quantity,
+                    'seats_retaken' => $hold->reservation_id ? 0 : $seats,
+                ]);
+            }
+        }
+
+        $hold->status = HoldStatus::CONVERTED;
+        $hold->save();
+    }
+
+    /**
      * Auto-expire all active holds whose TTL has expired.
      */
     public function expireActiveHolds(): int

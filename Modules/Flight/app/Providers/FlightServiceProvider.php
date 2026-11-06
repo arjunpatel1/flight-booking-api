@@ -28,12 +28,21 @@ class FlightServiceProvider extends ServiceProvider
         $this->registerCustomerRateLimits();
 
         if ($this->app->runningInConsole()) {
-            $this->commands([\Modules\Flight\Console\ExpireUnconfirmedPnrBookings::class]);
-            // Paid bookings whose PNR did not arrive in time are sold out (full refund).
-            $this->app->booted(fn ($app) => $app[\Illuminate\Console\Scheduling\Schedule::class]
-                ->command(\Modules\Flight\Console\ExpireUnconfirmedPnrBookings::class)
-                ->everyMinute()
-                ->withoutOverlapping());
+            $this->commands([
+                \Modules\Flight\Console\ExpireUnconfirmedPnrBookings::class,
+                \Modules\Flight\Console\ExpireFlightHolds::class,
+            ]);
+            $this->app->booted(function ($app) {
+                $schedule = $app[\Illuminate\Console\Scheduling\Schedule::class];
+                // Paid bookings whose PNR did not arrive in time are sold out (full refund).
+                $schedule->command(\Modules\Flight\Console\ExpireUnconfirmedPnrBookings::class)
+                    ->everyMinute()
+                    ->withoutOverlapping();
+                // Timed-out fare locks put their seats back on sale.
+                $schedule->command(\Modules\Flight\Console\ExpireFlightHolds::class)
+                    ->everyMinute()
+                    ->withoutOverlapping();
+            });
         }
     }
 

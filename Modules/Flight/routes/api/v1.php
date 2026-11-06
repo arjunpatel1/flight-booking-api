@@ -8,7 +8,6 @@ use Modules\Flight\Http\Controllers\Api\V1\FlightFareController;
 use Modules\Flight\Http\Controllers\Api\V1\FlightFareFamilyController;
 use Modules\Flight\Http\Controllers\Api\V1\FlightCabinClassController;
 use Modules\Flight\Http\Controllers\Api\V1\FlightInventoryController;
-use Modules\Flight\Http\Controllers\Api\V1\FlightInventoryAllocationController;
 use Modules\Flight\Http\Controllers\Api\V1\FlightInventoryLedgerController;
 use Modules\Flight\Http\Controllers\Api\V1\FlightMetaController;
 use Modules\Flight\Http\Controllers\Api\V1\FlightRouteController;
@@ -96,6 +95,7 @@ Route::prefix('flight')->group(function () {
 
             Route::post('/bookings/{identifier}/payment', [FlightPaymentController::class, 'initiate']);
             Route::post('/payments/{reference}/verify', [FlightPaymentController::class, 'verify']);
+            Route::post('/payments/{reference}/failed', [FlightPaymentController::class, 'failed']);
             Route::get('/payments/{reference}', [FlightPaymentController::class, 'show']);
             Route::get('/bookings/{identifier}/payment-options', [FlightPaymentController::class, 'paymentOptions']);
 
@@ -227,13 +227,6 @@ Route::prefix('flight')->group(function () {
     Route::put('/fares/{id}/rules', [FlightFareController::class, 'rules']);
 
     // â”€â”€ Phase 4: Inventory Allocation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    Route::get('/inventory-allocations', [FlightInventoryAllocationController::class, 'index']);
-    Route::post('/inventory-allocations', [FlightInventoryAllocationController::class, 'store']);
-    Route::get('/inventory-allocations/{id}', [FlightInventoryAllocationController::class, 'show']);
-    Route::post('/inventory-allocations/{id}/approve', [FlightInventoryAllocationController::class, 'approve']);
-    Route::post('/inventory-allocations/{id}/reject', [FlightInventoryAllocationController::class, 'reject']);
-    Route::post('/inventory-allocations/{id}/cancel', [FlightInventoryAllocationController::class, 'cancel']);
-    Route::post('/inventory-allocations/{id}/reverse', [FlightInventoryAllocationController::class, 'reverse']);
 
 
     // â”€â”€ Phase 4: Inventory Ledger â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

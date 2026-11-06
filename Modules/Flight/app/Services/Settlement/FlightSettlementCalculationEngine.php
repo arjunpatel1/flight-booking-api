@@ -66,17 +66,19 @@ class FlightSettlementCalculationEngine
             $agentCommission       = $loggedAgent ? (float) $loggedAgent->commission_amount : ($clientMarkup > 0 ? $clientMarkup : (float) ($booking->meta['agent_commission'] ?? 0));
             $tenantCommission      = $loggedTenant ? (float) $loggedTenant->commission_amount : 0;
 
-            // 3. Tenant Revenue: Tenant markup + any tenant commission
-            $tenantRevenue = $tenantMarkup + $tenantCommission;
+            // 3. Tenant Revenue: Tenant markup + any tenant commission + the convenience
+            //    fee, which the tenant sets and keeps
+            $tenantRevenue = $tenantMarkup + $tenantCommission + $convenienceFee;
 
-            // 4. Platform Revenue: Platform markup + convenience fee - platform absorbed discount
-            $platformRevenue = max(0, $platformMarkup + $convenienceFee - $discount);
+            // 4. Platform Revenue: Platform markup - platform absorbed discount
+            $platformRevenue = max(0, $platformMarkup - $discount);
 
             // 5. Taxes: GST + Statutory aviation taxes
             $taxes = $gst + $supplierTaxes;
 
-            // 6. Fees: Convenience fee + Supplier ancillary/booking fees
-            $fees = $convenienceFee + $supplierFees;
+            // 6. Fees: Supplier ancillary/booking fees. Added to what the platform
+            //    retains in reports, so the tenant's convenience fee stays out.
+            $fees = $supplierFees;
 
             // Distributor & Agent IDs
             $distributorId = $loggedDistributor?->recipient_id ?? ($booking->meta['distributor_id'] ?? null);

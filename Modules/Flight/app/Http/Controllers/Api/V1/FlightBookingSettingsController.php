@@ -7,6 +7,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Modules\Core\Http\Controllers\Controller;
 use Modules\Flight\Services\Booking\FlightPnrAllocationService;
+use Modules\Flight\Services\Pricing\FlightConvenienceFee;
 use Modules\Flight\Services\Servicing\FlightRefundPolicyService;
 use Modules\Saas\Models\Tenant;
 use Modules\Support\ApiResponse;
@@ -42,6 +43,7 @@ class FlightBookingSettingsController extends Controller
             // extra baggage requests.
             'booking_alert_whatsapp_numbers' => ['sometimes', 'array', 'max:5'],
             'booking_alert_whatsapp_numbers.*' => ['string', 'regex:/^\+?[0-9 ()-]{10,20}$/'],
+            'convenience_fee_per_passenger' => ['sometimes', 'numeric', 'min:0', 'max:100000'],
         ]);
 
         $tenant = $this->tenantFor($request);
@@ -63,8 +65,21 @@ class FlightBookingSettingsController extends Controller
                 $data['booking_alert_whatsapp_numbers'],
             ))));
         }
+        // Saving this page sends 0 for a tenant that never set a fee; that must
+        // not count as setting one, or fares with their own fee would be reset.
+        $currentFee = $flightSettings['convenience_fee_per_passenger'] ?? null;
+        $newFee = array_key_exists('convenience_fee_per_passenger', $data) ? round((float) $data['convenience_fee_per_passenger'], 2) : null;
+        $feeChanged = $newFee !== null && $newFee !== round((float) ($currentFee ?? 0), 2);
+        if ($feeChanged) {
+            $flightSettings['convenience_fee_per_passenger'] = $newFee;
+        }
         $settings['flight_booking'] = $flightSettings;
-        $tenant->forceFill(['settings' => $settings])->save();
+        DB::transaction(function () use ($tenant, $settings, $feeChanged, $newFee) {
+            $tenant->forceFill(['settings' => $settings])->save();
+            if ($feeChanged) {
+                app(FlightConvenienceFee::class)->applyToFares((int) $tenant->id, $newFee);
+            }
+        });
 
         return ApiResponse::updated($this->bookingSettings($tenant->fresh()), 'Flight booking settings saved.');
     }
@@ -76,6 +91,7 @@ class FlightBookingSettingsController extends Controller
             'pnr_confirmation_timeout_minutes' => FlightPnrAllocationService::timeoutMinutes($tenant),
             'booking_alert_emails' => array_values((array) data_get($tenant->settings, 'flight_booking.booking_alert_emails', [])),
             'booking_alert_whatsapp_numbers' => array_values((array) data_get($tenant->settings, 'flight_booking.booking_alert_whatsapp_numbers', [])),
+            'convenience_fee_per_passenger' => (float) data_get($tenant->settings, 'flight_booking.convenience_fee_per_passenger', 0),
         ];
     }
 

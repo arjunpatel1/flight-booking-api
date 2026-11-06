@@ -99,6 +99,10 @@ class FlightInventoryController extends Controller
             if ($request->boolean('sync_cabins', false)) {
                 FlightInventory::where('tenant_id', $tenantId)
                     ->where('flight_number', $common['flight_number'])
+                    // A flight number can run on several schedules; only this one is being edited.
+                    ->where('origin_airport_id', $common['origin_airport_id'])
+                    ->where('destination_airport_id', $common['destination_airport_id'])
+                    ->where('departure_time', $common['departure_time'])
                     ->whereNotIn('cabin_class', $updatedCabinClasses)
                     ->delete();
             }

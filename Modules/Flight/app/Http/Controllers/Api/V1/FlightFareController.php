@@ -11,6 +11,7 @@ use Modules\Flight\Models\FlightFare;
 use Modules\Flight\Models\FlightFareRule;
 use Modules\Flight\Models\FlightInventory;
 use Modules\Flight\Services\Pricing\FlightFareAggregationEngine;
+use Modules\Flight\Services\Pricing\FlightConvenienceFee;
 use Modules\Flight\Services\Pricing\FlightPricingEngine;
 use Modules\Support\ApiResponse;
 
@@ -225,6 +226,12 @@ class FlightFareController extends Controller
             return ApiResponse::errors(['flight_inventory_id' => 'The selected inventory belongs to a different tenant.'], 'Flight inventory tenant mismatch.', 422);
         }
 
+        // The tenant's fee setting wins over whatever the form sent.
+        $tenantFee = app(FlightConvenienceFee::class)->amountFor((int) $tenantId);
+        if ($tenantFee !== null) {
+            $validated['convenience_fee'] = $tenantFee;
+        }
+
         // Calculate Pricing Breakdown via Pipeline
         $pricing = $this->pricingEngine->calculate($validated);
 
@@ -339,6 +346,12 @@ class FlightFareController extends Controller
 
             'rules' => ['nullable', 'array'],
         ]);
+
+        // The tenant's fee setting wins over whatever the form sent.
+        $tenantFee = app(FlightConvenienceFee::class)->amountFor((int) $fare->tenant_id);
+        if ($tenantFee !== null) {
+            $validated['convenience_fee'] = $tenantFee;
+        }
 
         // Recompute pricing if price components are updated
         $mergedPricingInputs = array_merge([

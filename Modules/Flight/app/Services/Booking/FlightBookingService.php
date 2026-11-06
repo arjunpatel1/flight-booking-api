@@ -421,7 +421,11 @@ class FlightBookingService
 
         return [
             'total'           => $byStatus->sum(),
-            'payment_pending' => $count(BookingStatus::PAYMENT_PENDING, BookingStatus::QUOTED),
+            // A failed payment is no longer waiting: the table shows it as Payment Failed.
+            'payment_pending' => (clone $query)
+                ->whereIn('booking_status', [BookingStatus::PAYMENT_PENDING->value, BookingStatus::QUOTED->value])
+                ->where('payment_status', '!=', PaymentStatus::FAILED->value)
+                ->count(),
             'pnr_pending'     => $count(BookingStatus::PNR_PENDING),
             'confirmed'       => $count(BookingStatus::BOOKED, BookingStatus::CONFIRMED, BookingStatus::COMPLETED),
             // Cancelled bookings, plus any refunded booking still in another status.
@@ -461,16 +465,7 @@ class FlightBookingService
         }
 
         // Convert temporary hold to permanent booking conversion
-        if ($booking->hold_id || $booking->hold_reference) {
-            $hold = FlightHold::where('id', $booking->hold_id)
-                ->orWhere('hold_id', $booking->hold_reference)
-                ->first();
-
-            if ($hold && $hold->status === HoldStatus::ACTIVE) {
-                $hold->status = HoldStatus::CONVERTED;
-                $hold->save();
-            }
-        }
+        $this->holdService->convertForPaidBooking($booking);
 
         return $booking->fresh(['passengers', 'quote', 'hold']);
     }

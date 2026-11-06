@@ -52,7 +52,11 @@ enum FlightPaymentStatus: string
             self::COMPLETED->value => [
                 self::REFUNDED->value,
             ],
-            self::FAILED->value => [],
+            // A customer can retry in the same gateway window after a failed attempt:
+            // when the gateway captures the money, that outcome must still be recorded.
+            self::FAILED->value => [
+                self::COMPLETED->value,
+            ],
             self::CANCELLED->value => [],
             self::REFUNDED->value => [],
         ];
