@@ -79,6 +79,11 @@ class FlightSearchEngine
             $filteredReturn = $this->applyFiltersAndSorting($returnRaw['itineraries'], $params);
         }
 
+        // Nothing to show: say whether the route flies that day but is full,
+        // so customers see "Sold out" rather than "No flights".
+        $soldOut = empty($filteredOutbound)
+            && $this->searchInternalInventory($params, $tenant, true) !== [];
+
         $executionTimeMs = round((microtime(true) - $startTime) * 1000, 2);
 
         return new FlightSearchResponse(
@@ -94,6 +99,7 @@ class FlightSearchEngine
                 'execution_time_ms' => $executionTimeMs,
                 'timestamp'         => now()->toIso8601String(),
                 'total_results'     => count($filteredOutbound),
+                'sold_out'          => $soldOut,
                 'minimum_advance_booking_days' => $tenant
                     ? (int) data_get($tenant->settings, 'flight_booking.minimum_advance_booking_days', 0)
                     : null,
@@ -166,8 +172,11 @@ class FlightSearchEngine
 
     /**
      * Search Internal Flight Inventory.
+     *
+     * @param  bool  $fullOnly  return the ids of flights that operate that day but
+     *                          don't have enough seats left (used to say "sold out")
      */
-    protected function searchInternalInventory(FlightSearchParams $params, ?Tenant $tenant = null): array
+    protected function searchInternalInventory(FlightSearchParams $params, ?Tenant $tenant = null, bool $fullOnly = false): array
     {
         $query = FlightInventory::active()
             ->with(['airline', 'originAirport', 'destinationAirport', 'aircraft', 'fares.fareFamily']);
@@ -181,9 +190,9 @@ class FlightSearchEngine
         $query->whereHas('originAirport', fn ($q) => $q->where('iata_code', $params->origin))
               ->whereHas('destinationAirport', fn ($q) => $q->where('iata_code', $params->destination));
 
-        // Minimum capacity
+        // Minimum capacity ($fullOnly: the flights that fly that day but lack the seats)
         $totalPax = $params->totalPassengers();
-        $query->where('available_seats', '>=', $totalPax);
+        $query->where('available_seats', $fullOnly ? '<' : '>=', $totalPax);
 
         $inventories = $query->get();
         $itineraries = [];
@@ -261,6 +270,11 @@ class FlightSearchEngine
                 if (! $matchesDay) {
                     continue;
                 }
+            }
+
+            if ($fullOnly) {
+                $itineraries[] = $inventory->id;
+                continue;
             }
 
             // The GST % entered on this flight's route for the searched date (0 if none).

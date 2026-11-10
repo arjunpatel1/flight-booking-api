@@ -163,6 +163,9 @@ class FlightCustomerAuthController extends Controller
                 return [
                     'id' => $booking->id,
                     'booking_reference' => $booking->booking_reference,
+                    // Round trip / multi city: the flights booked and paid together.
+                    'trip_reference' => $booking->trip_reference,
+                    'trip_leg' => $booking->trip_leg,
                     'pnr' => $booking->pnr,
                     'booking_status' => is_object($status) ? $status->value : (string) $status,
                     'ticket_status' => is_object($booking->ticket_status)

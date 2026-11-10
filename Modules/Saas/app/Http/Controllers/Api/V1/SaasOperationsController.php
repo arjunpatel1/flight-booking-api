@@ -208,7 +208,11 @@ class SaasOperationsController extends Controller
         $request->merge(['roles' => $requestedRoles]);
         $data = $request->validate([
             'roles' => ['required', 'array', 'min:1', 'max:5'],
-            'roles.*' => ['required', 'string', 'distinct', Rule::in(DefaultRole::getBranchAvailableRoles())],
+            'roles.*' => ['required', 'string', 'distinct', Rule::in([
+                ...DefaultRole::getTenantAssignableRoles(),
+                // This agency's own roles (created in the permission editor).
+                ...SaasTenantRoleController::tenantCustomRoles($tenant)->pluck('name')->all(),
+            ])],
             'branch_id' => [
                 'nullable',
                 'integer',
@@ -220,13 +224,13 @@ class SaasOperationsController extends Controller
         abort_if(
             $enterpriseRoleSelected && count($data['roles']) > 1,
             422,
-            'Restaurant super administrator is a tenant-wide profile and cannot be combined with branch roles.'
+            'Enterprise Administrator is a tenant-wide profile and cannot be combined with other roles.'
         );
 
         $roles = Role::query()
             ->whereIn('name', $data['roles'])
             ->get();
-        abort_unless($roles->count() === count($data['roles']), 422, 'One or more restaurant roles are unavailable. Synchronize permissions and try again.');
+        abort_unless($roles->count() === count($data['roles']), 422, 'One or more roles are unavailable. Sync the permission catalog and try again.');
 
         $branchId = null;
         if (! $enterpriseRoleSelected) {
@@ -239,7 +243,7 @@ class SaasOperationsController extends Controller
                 abort_unless(
                     $tenantBranches->count() === 1,
                     422,
-                    'Select a restaurant branch before assigning branch-scoped roles.'
+                    'Select a branch before assigning branch-scoped roles.'
                 );
                 $branchId = $tenantBranches->first();
             }
@@ -790,13 +794,13 @@ class SaasOperationsController extends Controller
             ->with(['permissions' => fn ($query) => $query->orderBy('name')])
             ->get()
             ->keyBy('name');
-        $assignable = collect(DefaultRole::getBranchAvailableRoles());
+        $assignable = collect(DefaultRole::getTenantAssignableRoles());
         $descriptions = [
-            DefaultRole::SuperAdmin->value => 'Global platform owner with unrestricted SaaS and restaurant access.',
+            DefaultRole::SuperAdmin->value => 'Global platform owner with unrestricted access to the platform and every agency.',
             DefaultRole::Admin->value => 'Global platform administrator for shared operations and configuration.',
-            DefaultRole::EnterpriseAdmin->value => 'Restaurant super administrator with access across every branch in this tenant.',
-            DefaultRole::AdminBranch->value => 'Restaurant administrator with complete tenant and branch management.',
-            DefaultRole::Manager->value => 'Restaurant operations, team supervision, reporting, and approvals.',
+            DefaultRole::EnterpriseAdmin->value => 'Agency super administrator with access across every branch in this tenant.',
+            DefaultRole::AdminBranch->value => 'Agency administrator with complete tenant and branch management.',
+            DefaultRole::Manager->value => 'Agency operations, team supervision, reporting, and approvals.',
             DefaultRole::Cashier->value => 'Registers, billing, payments, invoices, and cash operations.',
             DefaultRole::Kitchen->value => 'Kitchen display, preparation workflow, and order status operations.',
             DefaultRole::Waiter->value => 'Tables, orders, payments, and waiter application workflows.',
@@ -821,6 +825,7 @@ class SaasOperationsController extends Controller
                 DefaultRole::SuperAdmin, DefaultRole::Admin => 'platform',
                 DefaultRole::Customer, DefaultRole::FlightCustomer => 'customer',
                 DefaultRole::FlightAdmin, DefaultRole::FlightDistributor, DefaultRole::FlightAgent => 'flight',
+                DefaultRole::EnterpriseAdmin, DefaultRole::AdminBranch, DefaultRole::Manager => 'agency',
                 default => 'restaurant',
             };
 
@@ -834,8 +839,33 @@ class SaasOperationsController extends Controller
                 'permission_mode' => $defaultRole === DefaultRole::SuperAdmin ? 'all' : 'explicit',
                 'permission_count' => $permissions->count(),
                 'permissions' => $permissions,
+                'built_in' => true,
+                // Built-in agency roles can be edited for every agency; `customized`
+                // means the edit is in place and default-role sync skips the role.
+                'editable' => $role !== null && in_array($defaultRole->value, SaasTenantRoleController::editableBuiltInRoleNames(), true),
+                'customized' => (bool) ($role?->permissions_customized ?? false),
             ];
         })->values();
+
+        $customRoles = SaasTenantRoleController::tenantCustomRoles($tenant)
+            ->with(['permissions' => fn ($query) => $query->orderBy('name')])
+            ->orderBy('id')
+            ->get()
+            ->map(fn (Role $role) => [
+                'id' => $role->id,
+                'name' => $role->name,
+                'display_name' => $role->display_name,
+                'description' => 'Custom role for this agency only.',
+                'scope' => 'custom',
+                'assignable' => true,
+                'permission_mode' => 'explicit',
+                'permission_count' => $role->permissions->count(),
+                'permissions' => $role->permissions->pluck('name')->values(),
+                'built_in' => false,
+                'editable' => true,
+                'customized' => false,
+            ])
+            ->values();
 
         $planFeatures = collect($tenant->activeSubscription?->plan?->features ?? []);
         $featureCatalog = collect(config('saas.default_features', []))
@@ -849,8 +879,13 @@ class SaasOperationsController extends Controller
             ->values();
 
         return [
-            'roles' => $roleCatalog,
+            'roles' => $roleCatalog->concat($customRoles)->values(),
             'permissions' => $allPermissions,
+            // What an agency role may hold; the editor offers only these.
+            'grantable_permissions' => $allPermissions
+                ->filter(fn (string $permission) => DefaultRole::isFlightAgencyPermission($permission)
+                    && ! str($permission)->startsWith(DefaultRole::platformOnlyPermissionPrefixes()))
+                ->values(),
             'features' => $featureCatalog,
             'assignable_roles' => $assignable->values(),
         ];

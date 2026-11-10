@@ -44,6 +44,12 @@ class FlightPaymentService
     ): array {
         $booking = $this->resolveBooking($bookingIdentifier, $tenant);
 
+        // A flight of a round trip / multi-city trip is never paid on its own:
+        // that would charge one flight and leave the others unpaid.
+        if ($booking->trip_reference) {
+            return $this->initiateTripPayment($booking, $params, $user);
+        }
+
         // 1. Verify hold & quote validity
         $this->verifyBookingPayability($booking);
 
@@ -161,6 +167,216 @@ class FlightPaymentService
         ];
     }
 
+    // ── Trips: several flights, one gateway payment ─────────────────────────
+    //
+    // Every flight of a trip keeps its own payment row with its own share of
+    // the amount (so cancelling one flight refunds just that share), and all
+    // of them carry the same gateway order, which is for the trip total.
+    // Confirming, failing, the webhook and staff "Check payment" always act on
+    // the whole set: every flight is paid, or none is.
+
+    /** @return \Illuminate\Support\Collection<int, FlightBooking> the trip's flights in travel order */
+    protected function tripBookings(FlightBooking $booking): \Illuminate\Support\Collection
+    {
+        return FlightBooking::query()
+            ->with(['hold', 'quote'])
+            ->where('trip_reference', $booking->trip_reference)
+            ->where('tenant_id', $booking->tenant_id)
+            ->orderBy('trip_leg')
+            ->orderBy('id')
+            ->get();
+    }
+
+    /**
+     * Payments paid together with this one (same trip and gateway order),
+     * including itself. A single-flight payment is a set of one.
+     *
+     * @return \Illuminate\Support\Collection<int, FlightPayment>
+     */
+    protected function orderSiblings(FlightPayment $payment, bool $lock = false): \Illuminate\Support\Collection
+    {
+        if (! $payment->trip_reference || ! $payment->gateway_order_id) {
+            return collect([$payment]);
+        }
+
+        $query = FlightPayment::query()
+            ->where('trip_reference', $payment->trip_reference)
+            ->where('gateway_order_id', $payment->gateway_order_id)
+            ->orderBy('id');
+
+        return ($lock ? $query->lockForUpdate() : $query)->get();
+    }
+
+    /** What the gateway was asked to collect for this payment's order. */
+    protected function orderTotal(\Illuminate\Support\Collection $payments): float
+    {
+        return round((float) $payments->sum(fn (FlightPayment $payment) => (float) $payment->amount), 2);
+    }
+
+    /** Keep a flight's hold (and its quote) alive while the customer is in checkout. */
+    protected function extendHoldForCheckout(FlightBooking $booking): ?FlightHold
+    {
+        $hold = $booking->hold_id
+            ? FlightHold::where('id', $booking->hold_id)->orWhere('hold_id', $booking->hold_reference)->first()
+            : null;
+        if ($hold && $hold->status === HoldStatus::ACTIVE) {
+            $hold->expires_at = Carbon::now()->addSeconds(max(900, (int) config('flight.payment_hold_ttl', 1800)));
+            $hold->save();
+
+            $quote = $booking->quote;
+            if ($quote && (string) $quote->status === 'ACTIVE') {
+                $quote->expires_at = $hold->expires_at;
+                $quote->save();
+            }
+        }
+
+        return $hold;
+    }
+
+    protected function initiateTripPayment(FlightBooking $lead, array $params, ?User $user): array
+    {
+        $bookings = $this->tripBookings($lead);
+        if ($bookings->count() < 2) {
+            throw new DomainException('This trip is incomplete. Please search and book the flights again.');
+        }
+
+        $gateway = strtolower($params['gateway'] ?? 'razorpay');
+        if (! in_array($gateway, ['razorpay', 'mock'], true)) {
+            throw new DomainException('Unsupported flight payment gateway.');
+        }
+        if ($gateway === 'mock' && ! app()->environment('local', 'testing')) {
+            throw new DomainException('Mock payments are disabled outside local and test environments.');
+        }
+
+        foreach ($bookings as $booking) {
+            $this->verifyBookingPayability($booking);
+            if ($booking->payment_status === PaymentStatus::FAILED) {
+                $booking->update(['payment_status' => PaymentStatus::PENDING]);
+            }
+        }
+        $holds = $bookings->map(fn (FlightBooking $booking) => $this->extendHoldForCheckout($booking))->filter();
+
+        // Authoritative amounts from each booking (never from the browser).
+        $amounts = $bookings->mapWithKeys(fn (FlightBooking $booking) => [$booking->id => $this->calculateAuthoritativeAmount($booking)]);
+        $total = round((float) $amounts->sum(), 2);
+        $currency = $lead->currency ?: 'INR';
+        $holdSession = [
+            'hold_expires_at'        => $holds->min(fn (FlightHold $hold) => $hold->expires_at)?->toIso8601String(),
+            'hold_remaining_seconds' => $holds->min(fn (FlightHold $hold) => $hold->remaining_seconds),
+        ];
+
+        // A retry with the same key reuses the trip's open payment session.
+        $idempotencyKey = $params['idempotency_key'] ?? null;
+        if ($idempotencyKey) {
+            $existing = FlightPayment::query()
+                ->where('trip_reference', $lead->trip_reference)
+                ->where('idempotency_key', $idempotencyKey)
+                ->whereNotIn('status', [FlightPaymentStatus::FAILED, FlightPaymentStatus::CANCELLED])
+                ->get();
+            $sameOrder = $existing->pluck('gateway_order_id')->filter()->unique();
+            $sameAmounts = $existing->count() === $bookings->count()
+                && $existing->every(fn (FlightPayment $payment) => abs((float) $payment->amount - (float) ($amounts[$payment->flight_booking_id] ?? -1)) < 0.01);
+            if ($sameOrder->count() === 1 && $sameAmounts) {
+                if ($existing->contains(fn (FlightPayment $payment) => strtolower($payment->gateway) !== $gateway)) {
+                    throw new DomainException('This idempotency key is already associated with another payment gateway.');
+                }
+                $leadPayment = $existing->firstWhere('flight_booking_id', $lead->id) ?? $existing->first();
+
+                return $this->tripPaymentResponse($leadPayment, $existing, $total, $holdSession);
+            }
+        }
+
+        $method = $params['payment_method'] ?? FlightPaymentMethod::GATEWAY->value;
+        $payments = DB::transaction(fn () => $bookings->map(fn (FlightBooking $booking) => FlightPayment::create([
+            'tenant_id'            => $booking->tenant_id,
+            'flight_booking_id'    => $booking->id,
+            'trip_reference'       => $lead->trip_reference,
+            'flight_fare_quote_id' => $booking->quote_id,
+            'flight_hold_id'       => $booking->hold_id,
+            'user_id'              => $user?->id ?? $booking->user_id,
+            'payer_type'           => 'CUSTOMER',
+            'payer_id'             => $user?->id ?? $booking->user_id,
+            'payment_method'       => $method,
+            'gateway'              => $gateway,
+            'idempotency_key'      => $idempotencyKey,
+            'amount'               => $amounts[$booking->id],
+            'currency'             => $currency,
+            'status'               => FlightPaymentStatus::INITIATED,
+            'initiated_at'         => now(),
+        ])));
+        $leadPayment = $payments->firstWhere('flight_booking_id', $lead->id) ?? $payments->first();
+
+        try {
+            $orderData = $this->gatewayAdapter->createOrder($leadPayment, $total);
+        } catch (\Throwable $error) {
+            $payments->each(fn (FlightPayment $payment) => $payment->transitionTo(FlightPaymentStatus::FAILED, [
+                'failure_reason' => 'Payment gateway order could not be created.',
+            ]));
+            throw $error;
+        }
+
+        foreach ($payments as $payment) {
+            $payment->update([
+                'gateway_order_id'          => $orderData['gateway_order_id'] ?? null,
+                'gateway_response_metadata' => array_merge($orderData, [
+                    'trip_reference' => $lead->trip_reference,
+                    'trip_total'     => $total,
+                ]),
+            ]);
+        }
+        foreach ($bookings as $booking) {
+            event(new \Modules\Flight\Events\FlightPaymentInitiated($payments->firstWhere('flight_booking_id', $booking->id), $booking));
+        }
+
+        return $this->tripPaymentResponse($leadPayment->refresh(), $payments, $total, $holdSession);
+    }
+
+    private function tripPaymentResponse(FlightPayment $leadPayment, \Illuminate\Support\Collection $payments, float $total, array $holdSession): array
+    {
+        return [
+            'payment'        => $leadPayment,
+            'trip_reference' => $leadPayment->trip_reference,
+            'payments'       => $payments->map(fn (FlightPayment $payment) => [
+                'payment_reference' => $payment->payment_reference,
+                'flight_booking_id' => $payment->flight_booking_id,
+                'amount'            => (float) $payment->amount,
+            ])->values(),
+            'session'        => array_merge([
+                // The customer pays once, through the trip's first flight.
+                'payment_reference' => $leadPayment->payment_reference,
+                'gateway'           => $leadPayment->gateway,
+                'gateway_order_id'  => $leadPayment->gateway_order_id,
+                'amount'            => $total,
+                'currency'          => $leadPayment->currency,
+                'key_id'            => $leadPayment->gateway_response_metadata['key_id'] ?? 'mock_key',
+                'trip_reference'    => $leadPayment->trip_reference,
+            ], $holdSession),
+        ];
+    }
+
+    /** A captured gateway payment: mark one flight's payment completed and its booking paid. */
+    private function completeAndConfirm(FlightPayment $payment, string $gatewayPaymentId, array $completion): FlightBooking
+    {
+        if ($payment->status !== FlightPaymentStatus::COMPLETED) {
+            $payment->transitionTo(FlightPaymentStatus::COMPLETED, array_merge(['gateway_transaction_id' => $gatewayPaymentId], $completion));
+        }
+
+        $booking = FlightBooking::whereKey($payment->flight_booking_id)->lockForUpdate()->firstOrFail();
+        if ($booking->payment_status !== PaymentStatus::PAID) {
+            $booking->update([
+                'payment_status'    => PaymentStatus::PAID,
+                'booking_status'    => $this->paidBookingStatus($booking),
+                'payment_reference' => $payment->payment_reference,
+                'confirmed_at'      => now(),
+            ]);
+            app(\Modules\Flight\Services\Booking\FlightOfferService::class)->redeemForBooking($booking);
+            $this->holdService->convertForPaidBooking($booking);
+            event(new FlightPaymentConfirmed($payment, $booking));
+        }
+
+        return $booking;
+    }
+
     /**
      * Verify online payment callback and confirm booking atomically.
      */
@@ -183,7 +399,20 @@ class FlightPaymentService
                 return $payment;
             }
 
+            // A trip's flights share this gateway order: they are paid, or failed, together.
+            $siblings = $this->orderSiblings($payment, true);
             $booking = FlightBooking::whereKey($payment->flight_booking_id)->lockForUpdate()->firstOrFail();
+            $failAll = function (string $reason) use ($siblings): void {
+                foreach ($siblings as $sibling) {
+                    if ($sibling->status->canTransitionTo(FlightPaymentStatus::FAILED) && $sibling->status !== FlightPaymentStatus::FAILED) {
+                        $sibling->transitionTo(FlightPaymentStatus::FAILED, ['failure_reason' => $reason]);
+                    }
+                    $siblingBooking = FlightBooking::find($sibling->flight_booking_id);
+                    if ($siblingBooking) {
+                        event(new \Modules\Flight\Events\FlightPaymentFailed($sibling, $siblingBooking, $reason));
+                    }
+                }
+            };
 
             // Validate gateway order ID matches
             $givenOrderId = $payload['razorpay_order_id'] ?? $payload['order_id'] ?? null;
@@ -192,50 +421,92 @@ class FlightPaymentService
                 throw new DomainException('Mock payment verification is disabled outside local and test environments.');
             }
             if (! $payment->gateway_order_id || ! $givenOrderId || ! hash_equals((string) $payment->gateway_order_id, (string) $givenOrderId)) {
-                $payment->transitionTo(FlightPaymentStatus::FAILED, [
-                    'failure_reason' => 'Gateway order ID mismatch.',
-                ]);
-                event(new \Modules\Flight\Events\FlightPaymentFailed($payment, $booking, 'Gateway order ID mismatch.'));
+                $failAll('Gateway order ID mismatch.');
                 throw new DomainException('Gateway order ID does not match payment session.');
             }
 
             // Validate Signature
             $isValid = $this->gatewayAdapter->verifySignature($payment, $payload);
             if (! $isValid) {
-                $payment->transitionTo(FlightPaymentStatus::FAILED, [
-                    'failure_reason' => 'Payment signature verification failed.',
-                ]);
-                event(new \Modules\Flight\Events\FlightPaymentFailed($payment, $booking, 'Payment signature verification failed.'));
+                $failAll('Payment signature verification failed.');
                 throw new DomainException('Payment signature verification failed.');
             }
 
-            if (! $this->gatewayAdapter->verifyCapturedPayment($payment, $payload)) {
+            // The gateway must have collected the whole order (the trip total for a trip).
+            if (! $this->gatewayAdapter->verifyCapturedPayment($payment, $payload, $this->orderTotal($siblings))) {
                 throw new DomainException('Razorpay has not captured this payment yet. Please check the payment status before retrying.');
             }
 
             $gatewayPaymentId = $payload['razorpay_payment_id'] ?? $payload['payment_id'] ?? ('PAY-' . Str::random(12));
+            $reconciliation = 'REC-' . strtoupper(Str::random(10));
 
-            // Mark Payment COMPLETED
-            $payment->transitionTo(FlightPaymentStatus::COMPLETED, [
-                'gateway_transaction_id'    => $gatewayPaymentId,
-                'reconciliation_reference'  => 'REC-' . strtoupper(Str::random(10)),
-                'gateway_response_metadata' => array_merge($payment->gateway_response_metadata ?? [], $payload),
-            ]);
-
-            // Atomically mark Flight Booking confirmed
-            $booking->update([
-                'payment_status'    => PaymentStatus::PAID,
-                'booking_status'    => $this->paidBookingStatus($booking),
-                'payment_reference' => $payment->payment_reference,
-                'confirmed_at'      => now(),
-            ]);
-            app(\Modules\Flight\Services\Booking\FlightOfferService::class)->redeemForBooking($booking);
-            app(\Modules\Flight\Services\Hold\FlightHoldService::class)->convertForPaidBooking($booking);
-
-            // Emit Payment Confirmed event (Phase 16 will handle ticketing)
-            event(new FlightPaymentConfirmed($payment, $booking));
+            // Mark every payment COMPLETED and confirm every booking it pays for.
+            foreach ($siblings as $sibling) {
+                $this->completeAndConfirm($sibling, (string) $gatewayPaymentId, [
+                    'reconciliation_reference'  => $reconciliation,
+                    'gateway_response_metadata' => array_merge($sibling->gateway_response_metadata ?? [], $payload),
+                ]);
+            }
 
             return $payment->refresh();
+        });
+    }
+
+    /**
+     * Staff "Check Payment": the booking becomes paid only if Razorpay itself says
+     * the money arrived. Covers a customer who paid but whose browser closed before
+     * the verify call, when no webhook arrived either.
+     *
+     * @return array{paid: bool, booking: FlightBooking}
+     */
+    public function confirmFromGateway(string|FlightBooking $identifier, ?Tenant $tenant = null): array
+    {
+        $booking = $this->resolveBooking($identifier, $tenant);
+
+        if ($booking->payment_status === PaymentStatus::PAID) {
+            return ['paid' => true, 'booking' => $booking];
+        }
+        if (in_array($booking->booking_status, [BookingStatus::CANCELLED, BookingStatus::FAILED, BookingStatus::COMPLETED], true)) {
+            throw new DomainException("A {$booking->booking_status->value} booking cannot be marked as paid.");
+        }
+
+        $payments = FlightPayment::where('flight_booking_id', $booking->id)
+            ->where('gateway', 'razorpay')
+            ->whereNotNull('gateway_order_id')
+            ->latest('id')
+            ->get();
+
+        foreach ($payments as $payment) {
+            // A trip's order is for the whole trip, so that is the amount to find.
+            $gatewayPaymentId = $this->gatewayAdapter->findCapturedPaymentId($payment, $this->orderTotal($this->orderSiblings($payment)));
+            if ($gatewayPaymentId) {
+                $booking = $this->completeCheckedPayment($payment, $gatewayPaymentId);
+
+                return ['paid' => true, 'booking' => $booking];
+            }
+        }
+
+        return ['paid' => false, 'booking' => $booking];
+    }
+
+    private function completeCheckedPayment(FlightPayment $payment, string $gatewayPaymentId): FlightBooking
+    {
+        return DB::transaction(function () use ($payment, $gatewayPaymentId) {
+            $payment = FlightPayment::whereKey($payment->id)->lockForUpdate()->firstOrFail();
+            $booking = FlightBooking::whereKey($payment->flight_booking_id)->lockForUpdate()->firstOrFail();
+
+            // The customer's verify call or a webhook may have finished it meanwhile.
+            if ($booking->payment_status === PaymentStatus::PAID) {
+                return $booking;
+            }
+
+            // Every flight paid by this order (just this one outside a trip).
+            $reconciliation = 'CHECK-' . strtoupper(Str::random(8));
+            foreach ($this->orderSiblings($payment, true) as $sibling) {
+                $this->completeAndConfirm($sibling, $gatewayPaymentId, ['reconciliation_reference' => $reconciliation]);
+            }
+
+            return $booking->refresh();
         });
     }
 
@@ -249,6 +520,10 @@ class FlightPaymentService
         ?User $user = null
     ): FlightPayment {
         $booking = $this->resolveBooking($bookingIdentifier, $tenant);
+
+        if ($booking->trip_reference) {
+            throw new DomainException('This flight is part of a trip, which is paid online in one payment.');
+        }
 
         // 1. Idempotency Check: if already completed with this key, return existing payment
         $idempotencyKey = $params['idempotency_key'] ?? null;
@@ -400,6 +675,12 @@ class FlightPaymentService
                 ->applyGatewayRefundEvent((string) $event, $refundEntity);
         }
 
+        // A reschedule's extra charge was paid through a Razorpay payment link.
+        if (str_starts_with((string) $event, 'payment_link.')) {
+            return app(\Modules\Flight\Services\Servicing\FlightServicingService::class)
+                ->applyPaymentLinkEvent((string) $event, $payload);
+        }
+
         $entity = data_get($payload, 'payload.payment.entity') ?? $payload;
         $orderId = $entity['order_id'] ?? ($payload['order_id'] ?? null);
         $paymentId = $entity['id'] ?? ($payload['payment_id'] ?? null);
@@ -420,49 +701,46 @@ class FlightPaymentService
             if (strtolower($payment->gateway) !== strtolower($gateway)) {
                 throw new DomainException('Payment webhook gateway does not match the payment session.');
             }
+            // Settled by the payment_link.* event, not by this payment's own event.
+            if (($payment->gateway_response_metadata['type'] ?? null) === 'RESCHEDULE_CHARGE') {
+                return ['status' => 'ignored', 'message' => 'Reschedule charges are settled by the payment link event.'];
+            }
+            // A trip's flights share this order; the gateway collected their total.
+            $siblings = $this->orderSiblings($payment, true);
             $entity = data_get($payload, 'payload.payment.entity') ?? $payload;
             if (in_array($event, ['payment.captured', 'order.paid'], true)
                 && (($entity['order_id'] ?? null) !== $payment->gateway_order_id
-                    || (int) ($entity['amount'] ?? 0) !== (int) round((float) $payment->amount * 100)
+                    || (int) ($entity['amount'] ?? 0) !== (int) round($this->orderTotal($siblings) * 100)
                     || strtoupper((string) ($entity['currency'] ?? '')) !== strtoupper((string) $payment->currency))) {
                 throw new DomainException('Payment webhook details do not match the flight payment.');
             }
 
             // Idempotent duplicate check
-            if ($payment->status === FlightPaymentStatus::COMPLETED) {
+            if ($siblings->every(fn (FlightPayment $sibling) => $sibling->status === FlightPaymentStatus::COMPLETED)) {
                 return ['status' => 'already_completed', 'reference' => $payment->payment_reference];
             }
 
             if (in_array($event, ['payment.captured', 'order.paid'], true)) {
-                $payment->transitionTo(FlightPaymentStatus::COMPLETED, [
-                    'gateway_transaction_id'    => $paymentId ?? $payment->gateway_transaction_id,
-                    'reconciliation_reference'  => 'WEBHOOK-' . strtoupper(Str::random(8)),
-                    'gateway_response_metadata' => array_merge($payment->gateway_response_metadata ?? [], $payload),
-                ]);
-
-                $booking = FlightBooking::whereKey($payment->flight_booking_id)->lockForUpdate()->first();
-                if ($booking && $booking->payment_status !== PaymentStatus::PAID) {
-                    $booking->update([
-                        'payment_status'    => PaymentStatus::PAID,
-                        'booking_status'    => $this->paidBookingStatus($booking),
-                        'payment_reference' => $payment->payment_reference,
-                        'confirmed_at'      => now(),
+                $reconciliation = 'WEBHOOK-' . strtoupper(Str::random(8));
+                foreach ($siblings as $sibling) {
+                    $this->completeAndConfirm($sibling, (string) ($paymentId ?? $sibling->gateway_transaction_id), [
+                        'reconciliation_reference'  => $reconciliation,
+                        'gateway_response_metadata' => array_merge($sibling->gateway_response_metadata ?? [], $payload),
                     ]);
-                    app(\Modules\Flight\Services\Booking\FlightOfferService::class)->redeemForBooking($booking);
-                    app(\Modules\Flight\Services\Hold\FlightHoldService::class)->convertForPaidBooking($booking);
-                    event(new FlightPaymentConfirmed($payment, $booking));
                 }
 
                 return ['status' => 'completed', 'reference' => $payment->payment_reference];
             }
 
             if (in_array($event, ['payment.failed'], true)) {
-                if ($payment->status !== FlightPaymentStatus::FAILED) {
-                    $payment->transitionTo(FlightPaymentStatus::FAILED, [
-                        'failure_reason' => $payload['error']['description'] ?? 'Webhook reported payment failed.',
-                    ]);
+                foreach ($siblings as $sibling) {
+                    if ($sibling->status->canTransitionTo(FlightPaymentStatus::FAILED) && $sibling->status !== FlightPaymentStatus::FAILED) {
+                        $sibling->transitionTo(FlightPaymentStatus::FAILED, [
+                            'failure_reason' => $payload['error']['description'] ?? 'Webhook reported payment failed.',
+                        ]);
+                    }
+                    $this->markBookingPaymentFailed($sibling);
                 }
-                $this->markBookingPaymentFailed($payment);
 
                 return ['status' => 'marked_failed', 'reference' => $payment->payment_reference];
             }
@@ -486,13 +764,16 @@ class FlightPaymentService
                 throw new DomainException('Tenant mismatch on payment failure.');
             }
 
-            if ($payment->status->canTransitionTo(FlightPaymentStatus::FAILED) && $payment->status !== FlightPaymentStatus::FAILED) {
-                $payment->transitionTo(FlightPaymentStatus::FAILED, [
-                    'failure_reason' => $reason ?: 'Customer checkout reported payment failed.',
-                ]);
-            }
-            if ($payment->status === FlightPaymentStatus::FAILED) {
-                $this->markBookingPaymentFailed($payment);
+            // A trip fails as a whole: every flight's seats go back on sale. A retry can still pay.
+            foreach ($this->orderSiblings($payment, true) as $sibling) {
+                if ($sibling->status->canTransitionTo(FlightPaymentStatus::FAILED) && $sibling->status !== FlightPaymentStatus::FAILED) {
+                    $sibling->transitionTo(FlightPaymentStatus::FAILED, [
+                        'failure_reason' => $reason ?: 'Customer checkout reported payment failed.',
+                    ]);
+                }
+                if ($sibling->status === FlightPaymentStatus::FAILED) {
+                    $this->markBookingPaymentFailed($sibling);
+                }
             }
 
             return $payment->refresh();
@@ -660,8 +941,12 @@ class FlightPaymentService
             return $identifier->refresh();
         }
 
-        $query = FlightBooking::where('booking_reference', $identifier)
-            ->orWhere('id', is_numeric($identifier) ? (int) $identifier : 0);
+        // Grouped: otherwise "ref = X OR id = Y AND tenant = Z" would let a booking
+        // reference from another tenant bypass the tenant filter.
+        $query = FlightBooking::where(function ($match) use ($identifier) {
+            $match->where('booking_reference', $identifier)
+                ->orWhere('id', is_numeric($identifier) ? (int) $identifier : 0);
+        });
 
         if ($tenant) {
             $query->where('tenant_id', $tenant->id);

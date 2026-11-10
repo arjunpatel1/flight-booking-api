@@ -36,6 +36,52 @@ class FlightBookingService
     ) {}
 
     /**
+     * A round trip or multi-city trip: one booking per flight (each keeps its own
+     * PNR, e-ticket, cancellation and refund), created together or not at all and
+     * linked by one trip reference so they are paid in a single payment.
+     *
+     * @param  array<int, array{quote_id: string}>  $legs  in travel order
+     * @param  array  $shared  contact, passengers and options used for every flight
+     * @return array{trip_reference: string, bookings: \Illuminate\Support\Collection<int, FlightBooking>}
+     */
+    public function createTripBookings(array $legs, array $shared, ?Tenant $tenant = null, ?User $user = null): array
+    {
+        $legs = array_values($legs);
+        if (count($legs) < 2 || count($legs) > 5) {
+            throw new DomainException('A trip has 2 to 5 flights.');
+        }
+
+        $quoteIds = array_map(fn (array $leg) => (string) ($leg['quote_id'] ?? ''), $legs);
+        if (in_array('', $quoteIds, true) || count(array_unique($quoteIds)) !== count($quoteIds)) {
+            throw new DomainException('Each flight in the trip needs its own fare quote.');
+        }
+
+        // Discounts are per booking; splitting one across a trip's flights is not supported yet.
+        unset($shared['meta']['flight_offer_code'], $shared['meta']['flight_discount_id'], $shared['idempotency_key']);
+
+        return DB::transaction(function () use ($legs, $shared, $tenant, $user) {
+            do {
+                $tripReference = 'TRP-' . strtoupper(Str::random(10));
+            } while (FlightBooking::query()->where('trip_reference', $tripReference)->exists());
+
+            $bookings = collect();
+            foreach ($legs as $index => $leg) {
+                $bookings->push($this->createBooking(array_merge($shared, [
+                    'quote_id'       => $leg['quote_id'],
+                    'trip_reference' => $tripReference,
+                    'trip_leg'       => $index + 1,
+                ]), $tenant, $user));
+            }
+
+            if ($bookings->pluck('tenant_id')->unique()->count() > 1) {
+                throw new DomainException('All flights in a trip must be booked with the same agency.');
+            }
+
+            return ['trip_reference' => $tripReference, 'bookings' => $bookings];
+        });
+    }
+
+    /**
      * Create a new booking from an existing immutable quote and passenger details.
      */
     public function createBooking(array $input, ?Tenant $tenant = null, ?User $user = null): FlightBooking
@@ -250,6 +296,9 @@ class FlightBookingService
                 'contact_phone'       => $contactPhone,
                 'idempotency_key'     => $input['idempotency_key'] ?? null,
                 'meta'                => $bookingMeta ?: null,
+                // Set only by createTripBookings: the flights of one trip, paid together.
+                'trip_reference'      => $input['trip_reference'] ?? null,
+                'trip_leg'            => $input['trip_leg'] ?? null,
             ]);
 
             // Create Passenger Records
@@ -436,40 +485,6 @@ class FlightBookingService
         ];
     }
 
-    /**
-     * Confirm a booking after payment is processed. Converts hold to CONVERTED.
-     */
-    public function confirmBooking(string|int $identifier, array $paymentData = [], ?Tenant $tenant = null): FlightBooking
-    {
-        $booking = $this->getBooking($identifier, $tenant);
-
-        // State machine check
-        $targetStatus = $booking->manual_pnr_required && empty($booking->pnr)
-            ? BookingStatus::PNR_PENDING
-            : BookingStatus::CONFIRMED;
-        $booking->transitionTo($targetStatus);
-
-        $booking->payment_status = PaymentStatus::PAID;
-        $booking->payment_reference = $paymentData['payment_reference'] ?? ('PAY-' . strtoupper(Str::random(10)));
-        $booking->save();
-
-        // A linked hold already decremented available seats when it was created.
-        // Do not deduct the same passengers a second time on confirmation.
-        $hasSeatHold = (bool) ($booking->hold_id || $booking->hold_reference);
-        if (! $hasSeatHold && $booking->flight_inventory_id) {
-            $inv = \Modules\Flight\Models\FlightInventory::find($booking->flight_inventory_id);
-            if ($inv && $inv->available_seats > 0) {
-                $paxCount = ($booking->pax_count_adult ?? 1) + ($booking->pax_count_child ?? 0);
-                $inv->decrement('available_seats', min($paxCount, $inv->available_seats));
-            }
-        }
-
-        // Convert temporary hold to permanent booking conversion
-        $this->holdService->convertForPaidBooking($booking);
-
-        return $booking->fresh(['passengers', 'quote', 'hold']);
-    }
-
     /** Assign an airline PNR to a paid internal booking awaiting manual PNR entry. */
     public function assignPnr(string|int $identifier, string $pnr, ?Tenant $tenant = null): FlightBooking
     {
@@ -552,9 +567,15 @@ class FlightBookingService
             return null;
         }
 
+        return $this->routePnrFor($inventory, $quote->tenant_id, (array) ($quote->selected_itinerary ?? []));
+    }
+
+    /** The PNR an admin saved on this flight's route, if any. */
+    public function routePnrFor(FlightInventory $inventory, ?int $tenantId, array $itinerary = []): ?string
+    {
         // Quotes built from a hold may carry the date only inside the full
         // departure datetime; the inventory's own datetime is the last resort.
-        $departureDate = FlightBooking::departureDateOf((array) ($quote->selected_itinerary ?? []))
+        $departureDate = FlightBooking::departureDateOf($itinerary)
             ?? FlightBooking::departureDateOf(['departure_time' => (string) $inventory->departure_time]);
         if (! $departureDate) {
             return null;
@@ -565,7 +586,7 @@ class FlightBookingService
         $departureClock = $inventory->departure_time ? Carbon::parse($inventory->departure_time)->format('H:i:s') : null;
 
         $route = FlightRoute::query()
-            ->where('tenant_id', $quote->tenant_id)
+            ->where('tenant_id', $tenantId)
             ->where('flight_number', $inventory->flight_number)
             ->where('origin_airport_id', $inventory->origin_airport_id)
             ->where('destination_airport_id', $inventory->destination_airport_id)

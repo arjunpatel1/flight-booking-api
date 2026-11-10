@@ -97,14 +97,20 @@ class FlightInventoryController extends Controller
 
             $updatedCabinClasses = array_map(fn($c) => strtoupper($c['cabin_class']), $common['cabins']);
             if ($request->boolean('sync_cabins', false)) {
-                FlightInventory::where('tenant_id', $tenantId)
+                $removedCabins = FlightInventory::where('tenant_id', $tenantId)
                     ->where('flight_number', $common['flight_number'])
                     // A flight number can run on several schedules; only this one is being edited.
                     ->where('origin_airport_id', $common['origin_airport_id'])
                     ->where('destination_airport_id', $common['destination_airport_id'])
                     ->where('departure_time', $common['departure_time'])
-                    ->whereNotIn('cabin_class', $updatedCabinClasses)
-                    ->delete();
+                    ->whereNotIn('cabin_class', $updatedCabinClasses);
+                try {
+                    app(\Modules\Flight\Services\Inventory\FlightDeletionGuard::class)
+                        ->assertInventoriesFree((clone $removedCabins)->pluck('id'), 'a cabin you removed');
+                } catch (\DomainException $e) {
+                    return ApiResponse::error($e->getMessage(), 422);
+                }
+                $removedCabins->delete();
             }
 
             $results = [];
@@ -264,17 +270,27 @@ class FlightInventoryController extends Controller
      */
     public function destroy(int|string $id): JsonResponse
     {
-        if (str_starts_with((string) $id, 'flight:')) {
-            $flightNum = strtoupper(substr((string) $id, 7));
-            FlightInventory::where('flight_number', $flightNum)->delete();
-            return ApiResponse::success(null, "All inventories for flight {$flightNum} deleted successfully");
+        $guard = app(\Modules\Flight\Services\Inventory\FlightDeletionGuard::class);
+
+        try {
+            if (str_starts_with((string) $id, 'flight:')) {
+                $flightNum = strtoupper(substr((string) $id, 7));
+                $flights = FlightInventory::where('flight_number', $flightNum);
+                $guard->assertInventoriesFree((clone $flights)->pluck('id'), "flight {$flightNum}");
+                $flights->delete();
+
+                return ApiResponse::success(null, "All inventories for flight {$flightNum} deleted successfully");
+            }
+
+            $inventory = is_numeric($id)
+                ? FlightInventory::findOrFail($id)
+                : FlightInventory::where('inventory_id', $id)->firstOrFail();
+
+            $guard->assertInventoriesFree((int) $inventory->id, "flight {$inventory->flight_number} ({$inventory->cabin_class})");
+            $inventory->delete();
+        } catch (\DomainException $e) {
+            return ApiResponse::error($e->getMessage(), 422);
         }
-
-        $inventory = is_numeric($id)
-            ? FlightInventory::findOrFail($id)
-            : FlightInventory::where('inventory_id', $id)->firstOrFail();
-
-        $inventory->delete();
 
         return ApiResponse::success(null, 'Flight inventory deleted successfully');
     }

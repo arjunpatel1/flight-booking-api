@@ -19,6 +19,7 @@ use Spatie\Permission\Models\Role as BaseRole;
  * @property string $name
  * @property string $display_name
  * @property bool|int $built_in
+ * @property bool $permissions_customized Built-in role edited by a platform admin; default-role sync skips it.
  *
  * @method static Builder|self builtIn(bool $operator = true)
  * @method static Builder|self notBuiltIn()
@@ -40,6 +41,10 @@ class Role extends BaseRole
      * @var array
      */
     protected array $translatable = ['display_name'];
+
+    protected $casts = [
+        'permissions_customized' => 'boolean',
+    ];
 
     /**
      * Perform any actions required after the model boots.

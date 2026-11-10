@@ -10,6 +10,7 @@ use Illuminate\Support\Str;
 use Modules\Saas\Enums\CustomerLifecycleStage;
 use Modules\Saas\Models\Tenant;
 use Modules\Saas\Services\Lifecycle\CustomerLifecycleService;
+use Modules\Saas\Services\Workspace\FlightTenantLaunchService;
 use Modules\Saas\Services\Workspace\TenantWorkspaceService;
 
 /** @mixin Tenant */
@@ -64,11 +65,31 @@ class TenantResource extends JsonResource
             'effective_entitlements' => app(\Modules\Saas\Services\Entitlements\EffectiveTenantEntitlementService::class)->features($this->resource),
             'devices' => $this->devicesPayload(),
             'printing' => $this->printingPayload(),
-            'onboarding' => $this->whenLoaded('latestProvisioningRun', function () {
+            // when(relationLoaded), not whenLoaded(): whenLoaded() returns null for an
+            // agency with no provisioning run, so the "no run" branch below never ran.
+            'onboarding' => $this->when($this->resource->relationLoaded('latestProvisioningRun'), function () {
                 $run = $this->latestProvisioningRun;
-                $workspaceProgress = app(TenantWorkspaceService::class)->setup($this->resource)['progress'];
+                // Flight launch steps, not the restaurant setup checklist
+                // (TenantWorkspaceService::setup), which a flight agency can never finish.
+                $launch = app(FlightTenantLaunchService::class)->evaluate($this->resource);
+                $workspaceProgress = $launch['progress'];
 
                 if ($run === null) {
+                    // Set up by hand but already running: setup is done, and
+                    // "Complete Onboarding" must not be offered (it resets the owner's login).
+                    if ($launch['live_without_provisioning']) {
+                        return [
+                            'uuid' => null,
+                            'status' => 'completed',
+                            'status_label' => __('Live (set up manually)'),
+                            'state' => 'COMPLETED',
+                            'progress' => $workspaceProgress,
+                            'current_step' => null,
+                            'error' => null,
+                            'manual_setup' => true,
+                        ];
+                    }
+
                     return [
                         'uuid' => null,
                         'status' => 'not_started',

@@ -22,6 +22,7 @@ return [
         "appearance" => "Appearance",
         "system_configuration" => "System Configuration",
         "printer_configuration" => "Printer Configuration",
+        "policies" => "Policies",
     ],
 
     "auto_refresh_settings" => "Auto-Refresh Settings",

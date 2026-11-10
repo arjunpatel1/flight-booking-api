@@ -51,6 +51,16 @@ class FlightBookingController extends Controller
             'flight_inventory_id'                  => 'nullable',
             'flight_fare_id'                       => 'nullable',
             'quote_reference'                      => 'nullable|string',
+            ...$this->travellerAndContactRules(),
+        ]);
+
+        return $this->createBookingFrom($request, $validated);
+    }
+
+    /** Passengers, contact and options: the same for a single booking and a trip. */
+    private function travellerAndContactRules(): array
+    {
+        return [
             'passengers'                           => 'required|array|min:1',
             'passengers.*.first_name'              => 'required|string|max:100',
             'passengers.*.last_name'               => 'required|string|max:100',
@@ -76,8 +86,70 @@ class FlightBookingController extends Controller
             'is_international'                     => 'nullable|boolean',
             'idempotency_key'                      => 'nullable|string|max:100',
             'meta'                                 => 'nullable|array',
+        ];
+    }
+
+    /**
+     * Round trip / multi city: one booking per flight, created together and
+     * linked by a trip reference. Each booking gets its own guest access token.
+     * POST /api/v1/flight/trips
+     */
+    public function createTripBooking(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'legs'            => 'required|array|min:2|max:5',
+            'legs.*.quote_id' => 'required|string|distinct',
+            ...$this->travellerAndContactRules(),
         ]);
 
+        try {
+            $tenant = $this->resolveTenant($request);
+            $shared = collect($validated)->except('legs')->all();
+            $customer = $request->user('sanctum');
+            if ($customer instanceof FlightCustomer) {
+                $shared['flight_customer_id'] = $customer->id;
+            }
+            $authenticatedUser = $request->user();
+            $user = $authenticatedUser instanceof User ? $authenticatedUser : null;
+
+            $trip = $this->bookingService->createTripBookings($validated['legs'], $shared, $tenant, $user);
+
+            return ApiResponse::created([
+                'trip_reference' => $trip['trip_reference'],
+                'total_amount'   => round((float) $trip['bookings']->sum(fn (FlightBooking $b) => (float) $b->total_amount), 2),
+                'currency'       => $trip['bookings']->first()?->currency ?? 'INR',
+                'bookings'       => $trip['bookings']->map(fn (FlightBooking $booking) => [
+                    'booking_reference'   => $booking->booking_reference,
+                    // Shown only here; the guest sends it back as X-Booking-Token.
+                    'access_token'        => $booking->issueAccessToken(),
+                    'id'                  => $booking->id,
+                    'trip_leg'            => $booking->trip_leg,
+                    'booking_status'      => $booking->booking_status->value,
+                    'payment_status'      => $booking->payment_status->value,
+                    'manual_pnr_required' => $booking->manual_pnr_required,
+                    'pnr'                 => $booking->pnr,
+                    'total_amount'        => (float) $booking->total_amount,
+                    'currency'            => $booking->currency,
+                    'itinerary'           => $booking->itinerary,
+                    'fare_snapshot'       => $booking->fare_snapshot,
+                    'passengers'          => $booking->passengers->map(fn ($p) => [
+                        'id'             => $p->id,
+                        'passenger_type' => $p->passenger_type->value,
+                        'full_name'      => $p->full_name,
+                    ])->values(),
+                ])->values(),
+            ], 'Trip booked. Pay once to confirm every flight.');
+        } catch (DomainException $e) {
+            return ApiResponse::errors(null, $e->getMessage(), 422);
+        } catch (\Throwable $e) {
+            report($e);
+
+            return ApiResponse::errors(null, 'Unable to create the trip booking. Please try again.', 500);
+        }
+    }
+
+    private function createBookingFrom(Request $request, array $validated): JsonResponse
+    {
         try {
             $tenant = $this->resolveTenant($request);
             $customer = $request->user('sanctum');
@@ -159,8 +231,22 @@ class FlightBookingController extends Controller
             $tenant = $this->resolveTenant($request);
             $booking = $this->bookingService->getBooking($identifier, $tenant);
 
+            // Round trip / multi city: the other flights booked and paid with this one.
+            $tripBookings = $booking->trip_reference
+                ? FlightBooking::query()
+                    ->where('trip_reference', $booking->trip_reference)
+                    ->where('tenant_id', $booking->tenant_id)
+                    ->orderBy('trip_leg')
+                    ->get(['booking_reference', 'trip_leg'])
+                    ->map(fn (FlightBooking $leg) => ['booking_reference' => $leg->booking_reference, 'trip_leg' => $leg->trip_leg])
+                    ->values()
+                : [];
+
             return ApiResponse::success([
                 'booking_reference' => $booking->booking_reference,
+                'trip_reference'    => $booking->trip_reference,
+                'trip_leg'          => $booking->trip_leg,
+                'trip_bookings'     => $tripBookings,
                 'id'                => $booking->id,
                 'pnr'               => $booking->pnr,
                 'tenant_id'         => $booking->tenant_id,
@@ -275,6 +361,9 @@ class FlightBookingController extends Controller
 
                 return [
                     'booking_reference' => $b->booking_reference,
+                    // Round trip / multi city: flights booked and paid together share this.
+                    'trip_reference'    => $b->trip_reference,
+                    'trip_leg'          => $b->trip_leg,
                     'id'                => $b->id,
                     'pnr'               => $b->pnr,
                     'manual_pnr_required' => $b->manual_pnr_required,
@@ -391,29 +480,29 @@ class FlightBookingController extends Controller
     }
 
     /**
-     * Confirm a booking after payment.
+     * Check with Razorpay whether the money arrived; only then is the booking paid.
      * POST /api/v1/flight/bookings/{identifier}/confirm
      */
     public function confirmBooking(Request $request, string $identifier): JsonResponse
     {
-        $validated = $request->validate([
-            'payment_reference' => 'nullable|string|max:100',
-            'payment_method'    => 'nullable|string|max:50',
-        ]);
-
         try {
             $tenant = $this->resolveTenant($request);
-            $booking = $this->bookingService->confirmBooking($identifier, $validated, $tenant);
+            $result = app(\Modules\Flight\Services\Payment\FlightPaymentService::class)
+                ->confirmFromGateway($identifier, $tenant);
+            $booking = $result['booking'];
 
             return ApiResponse::success([
+                'paid'              => $result['paid'],
                 'booking_reference' => $booking->booking_reference,
                 'booking_status'    => $booking->booking_status->value,
                 'payment_status'    => $booking->payment_status->value,
                 'payment_reference' => $booking->payment_reference,
                 'confirmed_at'      => $booking->confirmed_at?->toIso8601String(),
-                'message'           => $booking->booking_status === \Modules\Flight\Enums\BookingStatus::PNR_PENDING
-                    ? 'Payment confirmed. The booking is waiting for an administrator to assign its PNR.'
-                    : 'Booking confirmed successfully.',
+                'message'           => match (true) {
+                    ! $result['paid'] => 'Razorpay shows no completed payment for this booking, so it was not marked as paid.',
+                    $booking->booking_status === \Modules\Flight\Enums\BookingStatus::PNR_PENDING => 'Payment received. The booking is waiting for an administrator to assign its PNR.',
+                    default => 'Payment received and the booking is confirmed.',
+                },
             ]);
         } catch (DomainException $e) {
             return ApiResponse::errors(null, $e->getMessage(), 422);

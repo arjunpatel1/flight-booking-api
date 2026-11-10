@@ -25,12 +25,6 @@ return [
     'lock_ttl'  => env('FLIGHT_LOCK_TTL', 10),    // 10 seconds Redis distributed lock timeout
     'quote_ttl' => env('FLIGHT_QUOTE_TTL', 900),  // 15 minutes immutable quote validity
 
-    // Customer mobile OTP login. The code is delivered through the WhatsApp /
-    // email provider of the tenant that owns the customer's latest booking.
-    // A number with no bookings falls back to this tenant (leave empty to only
-    // allow login for numbers that have booked before).
-    'customer_otp_tenant_id' => env('FLIGHT_CUSTOMER_OTP_TENANT_ID'),
-
     // The agency whose logo, loader logo and favicon are shown to visitors
     // who are not signed in and not on an agency's own domain (the public
     // flight site and the login page). Empty: the platform default logo.

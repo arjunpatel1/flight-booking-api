@@ -219,6 +219,12 @@ class FlightRouteController extends Controller
         $route = FlightRoute::findOrFail($id);
 
         try {
+            app(\Modules\Flight\Services\Inventory\FlightDeletionGuard::class)->assertRouteFree($route);
+        } catch (\DomainException $e) {
+            return ApiResponse::error($e->getMessage(), 422);
+        }
+
+        try {
             DB::transaction(function () use ($route) {
                 // Delete associated flight schedules if they have no active flight instances
                 $route->schedules()->delete();

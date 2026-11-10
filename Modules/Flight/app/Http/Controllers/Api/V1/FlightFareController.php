@@ -412,6 +412,11 @@ class FlightFareController extends Controller
     public function destroy(int $id): JsonResponse
     {
         $fare = FlightFare::findOrFail($id);
+        try {
+            app(\Modules\Flight\Services\Inventory\FlightDeletionGuard::class)->assertFareFree((int) $fare->id);
+        } catch (\DomainException $e) {
+            return ApiResponse::errors(null, $e->getMessage(), 422);
+        }
         $fare->delete();
 
         return ApiResponse::success(null, message: 'Flight fare deleted successfully');

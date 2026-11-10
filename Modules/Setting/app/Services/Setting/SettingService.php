@@ -35,7 +35,33 @@ use Storage;
 
 class SettingService implements SettingServiceInterface
 {
+    /**
+     * Customer-site policy page => its tenant setting key (Settings → Policies).
+     * The refund page is not here: it is built from the flight Cancellation &
+     * Refund Policy settings, the same rules that calculate every refund.
+     */
+    public const POLICY_KEYS = [
+        'terms'   => 'policy_terms',
+        'privacy' => 'policy_privacy',
+    ];
+
     public function __construct(private readonly AppearanceService $appearanceService) {}
+
+    /**
+     * One published policy of the current agency, or null when not written.
+     *
+     * @return array{type: string, text: string, updated_at: ?string}|null
+     */
+    public function policy(string $type): ?array
+    {
+        $key = self::POLICY_KEYS[$type] ?? null;
+        $text = $key ? trim((string) setting($key)) : '';
+        if ($text === '') {
+            return null;
+        }
+
+        return ['type' => $type, 'text' => $text, 'updated_at' => setting('policy_updated_at')];
+    }
 
     /** {@inheritDoc} */
     public function label(): string
@@ -74,7 +100,8 @@ class SettingService implements SettingServiceInterface
         // Visitors who are not signed in and not on an agency's own domain
         // (the public flight site, the login page) see the logos of the
         // agency set in FLIGHT_PUBLIC_BRAND_TENANT_ID instead of the platform logo.
-        if ($brand = $this->publicBrandLogos()) {
+        $brand = $this->publicBrandLogos();
+        if ($brand) {
             $resolvedLogo = $brand['logo'] ?: $resolvedLogo;
             $loaderLogo = $brand['loader_logo'] ?: $loaderLogo;
             $favicon = $brand['favicon'] ?: $brand['logo'] ?: $favicon;
@@ -98,6 +125,15 @@ class SettingService implements SettingServiceInterface
             'loader_logo_data_base64' => null,
             'favicon' => $favicon,
             'waiter_table_status_flow_enabled' => (bool) setting('waiter_table_status_flow_enabled', true),
+            // The agency's name and onboarding contact for its customer site;
+            // null on the platform itself (no agency known).
+            'public_brand' => $this->agencyBrand($brand),
+            // Which of the agency's policies are written, so the customer site
+            // only links to pages that exist. The text is read from /app/policies/{type}.
+            'public_policies' => array_map(
+                fn (string $key) => filled(setting($key)),
+                self::POLICY_KEYS,
+            ),
         ];
 
         if ($includeLogoData) {
@@ -108,12 +144,13 @@ class SettingService implements SettingServiceInterface
     }
 
     /**
-     * Logo, loader logo and favicon URLs of the agency whose public site this
-     * is, for a visitor with no tenant: not signed in and on the platform
-     * domain (TenantDomainResolver::publicSiteTenantId). Null when no agency
-     * owns the site or a tenant is already known.
+     * Logo, loader logo and favicon URLs, plus the App Name setting, of the
+     * agency whose public site this is, for a visitor with no tenant: not
+     * signed in and on the platform domain
+     * (TenantDomainResolver::publicSiteTenantId). Null when no agency owns the
+     * site or a tenant is already known.
      *
-     * @return array{logo: ?string, loader_logo: ?string, favicon: ?string}|null
+     * @return array{tenant_id: int, logo: ?string, loader_logo: ?string, favicon: ?string, app_name: ?string}|null
      */
     private function publicBrandLogos(): ?array
     {
@@ -130,14 +167,73 @@ class SettingService implements SettingServiceInterface
         $this->refreshSettingBinding();
         try {
             return [
+                'tenant_id' => $tenantId,
                 'logo' => Media::getCacheMedia(setting('logo'))?->url ?: null,
                 'loader_logo' => Media::getCacheMedia(setting('loader_logo'))?->url ?: null,
                 'favicon' => Media::getCacheMedia(setting('favicon'))?->url ?: null,
+                'app_name' => setting('app_name'),
             ];
         } finally {
             $context->setId(null);
             $this->refreshSettingBinding();
         }
+    }
+
+    /**
+     * Name and onboarding contact of the agency this request belongs to: the
+     * resolved tenant (its own domain / signed-in staff), else the public-site
+     * agency from publicBrandLogos(). The name is the agency's App Name setting
+     * (set to the onboarding name at provisioning, editable in Settings), falling
+     * back to tenants.name; contact is tenants.contact_email / contact_phone
+     * entered at onboarding. Null on the platform itself.
+     *
+     * @param  array{tenant_id: int, app_name: ?string}|null  $publicBrand
+     * @return array{scope: string, name: ?string, contact_email: ?string, contact_phone: ?string}|null
+     */
+    private function agencyBrand(?array $publicBrand): ?array
+    {
+        $contextId = (int) app(\Modules\Saas\Support\TenantContext::class)->id();
+        $tenantId = $contextId ?: (int) ($publicBrand['tenant_id'] ?? 0);
+        if ($tenantId <= 0) {
+            return null;
+        }
+
+        $tenant = \Modules\Saas\Models\Tenant::query()
+            ->withoutGlobalScopes()
+            ->find($tenantId, ['id', 'name', 'contact_email', 'contact_phone']);
+        if (! $tenant) {
+            return null;
+        }
+
+        $appName = $this->localizedText($contextId ? setting('app_name') : ($publicBrand['app_name'] ?? null));
+        $name = $appName !== '' ? $appName : trim((string) $tenant->name);
+
+        return [
+            // 'tenant': this request belongs to the agency (its own domain or its
+            // signed-in staff). 'platform_default': the platform's own domain
+            // showing FLIGHT_PUBLIC_BRAND_TENANT_ID's brand to signed-out visitors.
+            'scope' => $contextId ? 'tenant' : 'platform_default',
+            'name' => $name !== '' ? $name : null,
+            'contact_email' => filled($tenant->contact_email) ? trim($tenant->contact_email) : null,
+            'contact_phone' => filled($tenant->contact_phone) ? trim($tenant->contact_phone) : null,
+        ];
+    }
+
+    /**
+     * A translatable setting as plain text. Right after a save the setting can
+     * come back as its translations (['en' => 'Balaji Travels', 'ar' => …])
+     * instead of a string; use the current locale, then the fallback locale,
+     * then the first filled value.
+     */
+    private function localizedText(mixed $value): string
+    {
+        if (is_array($value)) {
+            $value = $value[app()->getLocale()]
+                ?? $value[(string) config('app.fallback_locale')]
+                ?? collect($value)->first(fn ($text) => is_string($text) && trim($text) !== '');
+        }
+
+        return is_scalar($value) ? trim((string) $value) : '';
     }
 
     private function getDemoAccounts(): array
@@ -205,8 +301,10 @@ class SettingService implements SettingServiceInterface
     public function getSettings(SettingSection $section): array
     {
         $settings = setting()->all();
-        $appNameSetting = $section === SettingSection::Application
-            ? Setting::where('key', 'app_name')->first()
+        // Scoped: an unscoped where('key')->first() returned the platform's
+        // global row ("CRT Travels") instead of the agency's saved name.
+        $appNamePayload = $section === SettingSection::Application
+            ? Setting::rawScopedPayload('app_name')
             : null;
 
         return match ($section) {
@@ -222,9 +320,7 @@ class SettingService implements SettingServiceInterface
                 'end_of_week' => $settings['end_of_week'] ?? null,
             ],
             SettingSection::Application => [
-                'app_name' => $appNameSetting
-                    ? unserialize($appNameSetting->getRawOriginal('payload'))
-                    : setting('app_name'),
+                'app_name' => $appNamePayload ?? setting('app_name'),
             ],
             SettingSection::Currency => [
                 'supported_currencies' => $settings['supported_currencies'] ?? [],
@@ -258,6 +354,11 @@ class SettingService implements SettingServiceInterface
                     'filesystem_s3_key' => $settings['filesystem_s3_key'] ?? null,
                     'filesystem_s3_secret' => $settings['filesystem_s3_secret'] ?? null,
                 ],
+            ],
+            SettingSection::Policies => [
+                'policy_terms' => (string) ($settings['policy_terms'] ?? ''),
+                'policy_privacy' => (string) ($settings['policy_privacy'] ?? ''),
+                'policy_updated_at' => $settings['policy_updated_at'] ?? null,
             ],
             SettingSection::Logo => [
                 'logo' => Media::getCacheMedia($settings['logo'] ?? null, true),
@@ -485,9 +586,10 @@ class SettingService implements SettingServiceInterface
                 'appearance_background_type' => $settings['appearance_background_type'] ?? 'default',
                 'appearance_panel_background' => $settings['appearance_panel_background'] ?? null,
                 'appearance_gradient_background' => $settings['appearance_gradient_background'] ?? null,
-                'appearance_system_title' => $settings['appearance_system_title'] ?? ($settings['app_name'] ?? config('app.name')),
-                'appearance_admin_title' => $settings['appearance_admin_title'] ?? ($settings['app_name'] ?? config('app.name')),
-                'appearance_browser_title' => $settings['appearance_browser_title'] ?? ($settings['app_name'] ?? config('app.name')),
+                // Plain strings: the App Name fallback is translatable and showed "[object Object]".
+                'appearance_system_title' => AppearanceService::title($settings, 'appearance_system_title'),
+                'appearance_admin_title' => AppearanceService::title($settings, 'appearance_admin_title'),
+                'appearance_browser_title' => AppearanceService::title($settings, 'appearance_browser_title'),
                 'appearance_footer_text' => $settings['appearance_footer_text'] ?? null,
                 'appearance_print_terms' => $settings['appearance_print_terms'] ?? null,
                 'appearance_login_welcome_text' => $settings['appearance_login_welcome_text'] ?? null,
@@ -629,6 +731,10 @@ class SettingService implements SettingServiceInterface
             ]);
             Artisan::call('config:clear');
             Artisan::call('cache:clear');
+        }
+        if ($section == SettingSection::Policies) {
+            // Shown on the policy pages as "Last updated".
+            $data['policy_updated_at'] = now()->toDateString();
         }
         if ($section == SettingSection::Delivery && array_key_exists('delivery_cod_enabled', $data)) {
             // Cash on delivery is one decision: keep the checkout option in

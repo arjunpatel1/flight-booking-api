@@ -13,6 +13,7 @@ use Illuminate\Validation\ValidationException;
 use Modules\Flight\Models\FlightBooking;
 use Modules\Flight\Models\FlightCustomer;
 use Modules\Saas\Models\Tenant;
+use Modules\Saas\Support\TenantDomainResolver;
 use Modules\User\Models\CustomerOtpChallenge;
 use Modules\User\Services\CustomerOtp\CustomerOtpSender;
 use Symfony\Component\HttpFoundation\Response;
@@ -57,8 +58,11 @@ class FlightCustomerOtpService
 
         RateLimiter::hit($rateKey, 600);
 
+        // The agency whose site the customer is on sends the code (its WhatsApp
+        // number and brand), so a new customer with no booking yet can log in
+        // on any agency's site. Their last booking's agency is the fallback.
         $latestBooking = $this->bookingsForPhone(FlightBooking::query(), $phone)->latest('id')->first();
-        $tenantId = $latestBooking?->tenant_id ?: $this->fallbackTenantId();
+        $tenantId = $this->siteTenantId($request) ?: $latestBooking?->tenant_id;
 
         // An unknown number gets the same response shape as a real one, so the
         // endpoint cannot be used to discover who has booked with us.
@@ -233,11 +237,14 @@ class FlightCustomerOtpService
         abort(Response::HTTP_SERVICE_UNAVAILABLE, 'We could not send the verification code right now. Please try again shortly.');
     }
 
-    private function fallbackTenantId(): ?int
+    /** The agency whose public site (domain / subdomain) the request came from. */
+    private function siteTenantId(Request $request): ?int
     {
-        $tenantId = (int) config('flight.customer_otp_tenant_id');
+        $tenantId = (int) app(TenantDomainResolver::class)->publicSiteTenantId($request);
 
-        return $tenantId > 0 && Tenant::query()->withoutGlobalScopes()->whereKey($tenantId)->exists() ? $tenantId : null;
+        return $tenantId > 0 && Tenant::query()->withoutGlobalScopes()->where('is_active', true)->whereKey($tenantId)->exists()
+            ? $tenantId
+            : null;
     }
 
     private function normalizePhone(string $phone): string

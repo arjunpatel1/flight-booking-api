@@ -141,9 +141,12 @@ class FlightPaymentGatewayAdapter
 
     /**
      * Create an upstream gateway order (Razorpay or Mock).
+     *
+     * @param  float|null  $amount  a trip pays every flight in one order: the trip total
      */
-    public function createOrder(FlightPayment $payment): array
+    public function createOrder(FlightPayment $payment, ?float $amount = null): array
     {
+        $orderAmount = $amount ?? (float) $payment->amount;
         $gateway = strtolower($payment->gateway ?: 'razorpay');
 
         if ($gateway === 'mock' && ! app()->environment('local', 'testing')) {
@@ -159,13 +162,13 @@ class FlightPaymentGatewayAdapter
                 'gateway'          => 'mock',
                 'gateway_order_id' => $mockOrderId,
                 'key_id'           => 'mock_key_live_test',
-                'amount'           => (int) round((float) $payment->amount * 100),
+                'amount'           => (int) round($orderAmount * 100),
                 'currency'         => $payment->currency,
             ];
         }
 
         // Real Razorpay API Order Creation
-        $amountPaise = (int) round((float) $payment->amount * 100);
+        $amountPaise = (int) round($orderAmount * 100);
         $baseUrl = rtrim($this->razorpayConfig['base_url'] ?? 'https://api.razorpay.com/v1', '/');
 
         try {
@@ -184,6 +187,7 @@ class FlightPaymentGatewayAdapter
                         'tenant_id'         => (string) $payment->tenant_id,
                         'payment_reference' => $payment->payment_reference,
                         'booking_id'        => (string) $payment->flight_booking_id,
+                        'trip_reference'    => (string) ($payment->trip_reference ?? ''),
                     ],
                 ]);
 
@@ -244,7 +248,10 @@ class FlightPaymentGatewayAdapter
     /**
      * Confirm the payment with Razorpay and capture it before marking a booking paid.
      */
-    public function verifyCapturedPayment(FlightPayment $payment, array $payload): bool
+    /**
+     * @param  float|null  $expectedAmount  the whole order: the trip total when one payment covers several flights
+     */
+    public function verifyCapturedPayment(FlightPayment $payment, array $payload, ?float $expectedAmount = null): bool
     {
         if (strtolower($payment->gateway ?: '') === 'mock') {
             return app()->environment('local', 'testing');
@@ -271,9 +278,9 @@ class FlightPaymentGatewayAdapter
             }
 
             $details = $response->json();
-            $expectedAmount = (int) round((float) $payment->amount * 100);
+            $expectedPaise = (int) round(($expectedAmount ?? (float) $payment->amount) * 100);
             if (($details['order_id'] ?? null) !== $orderId
-                || (int) ($details['amount'] ?? 0) !== $expectedAmount
+                || (int) ($details['amount'] ?? 0) !== $expectedPaise
                 || strtoupper((string) ($details['currency'] ?? '')) !== strtoupper((string) $payment->currency)) {
                 throw new DomainException('Razorpay payment details do not match this booking.');
             }
@@ -281,7 +288,7 @@ class FlightPaymentGatewayAdapter
             if (($details['status'] ?? null) === 'authorized'
                 && (bool) ($this->razorpayConfig['capture_authorized'] ?? true)) {
                 $capture = $request->asJson()->post('/payments/' . $paymentId . '/capture', [
-                    'amount' => $expectedAmount,
+                    'amount' => $expectedPaise,
                     'currency' => $payment->currency,
                 ]);
                 if (! $capture->successful() || ! is_array($capture->json())) {
@@ -294,6 +301,130 @@ class FlightPaymentGatewayAdapter
         } catch (\Illuminate\Http\Client\ConnectionException $error) {
             throw new DomainException('Razorpay payment verification is temporarily unavailable. Please retry.');
         }
+    }
+
+    /**
+     * Create a Razorpay payment link. Razorpay emails/SMSes it to the customer.
+     *
+     * @return array{id: string, short_url: string}
+     */
+    public function createPaymentLink(FlightPayment $payment, array $customer, string $description, int $expiresAt): array
+    {
+        $response = $this->razorpayLinkRequest(fn ($request) => $request->asJson()->post('/payment_links', [
+            'amount' => (int) round((float) $payment->amount * 100),
+            'currency' => $payment->currency,
+            'accept_partial' => false,
+            'expire_by' => $expiresAt,
+            'reference_id' => substr((string) $payment->payment_reference, 0, 40),
+            'description' => substr($description, 0, 2048),
+            'customer' => array_filter($customer),
+            'notify' => ['email' => filled($customer['email'] ?? null), 'sms' => filled($customer['contact'] ?? null)],
+            'reminder_enable' => false,
+            'notes' => ['payment_reference' => (string) $payment->payment_reference, 'booking_id' => (string) $payment->flight_booking_id],
+        ]));
+
+        if (! filled($response['id'] ?? null) || ! filled($response['short_url'] ?? null)) {
+            throw new DomainException('Razorpay did not return a payment link.');
+        }
+
+        return ['id' => (string) $response['id'], 'short_url' => (string) $response['short_url']];
+    }
+
+    /**
+     * @return array{status: string, payment_id: ?string, amount_paid: int}
+     */
+    public function fetchPaymentLink(string $linkId): array
+    {
+        $response = $this->razorpayLinkRequest(fn ($request) => $request->get('/payment_links/' . $linkId));
+        $payments = (array) ($response['payments'] ?? []);
+
+        return [
+            'status' => (string) ($response['status'] ?? ''),
+            'payment_id' => data_get(end($payments) ?: [], 'payment_id'),
+            'amount_paid' => (int) ($response['amount_paid'] ?? 0),
+        ];
+    }
+
+    /** Best effort: an uncancelled link still stops working at its expiry time. */
+    public function cancelPaymentLink(string $linkId): void
+    {
+        try {
+            $this->razorpayLinkRequest(fn ($request) => $request->asJson()->post('/payment_links/' . $linkId . '/cancel'));
+        } catch (DomainException $error) {
+            Log::warning('Razorpay payment link could not be cancelled.', ['link' => $linkId, 'error' => $error->getMessage()]);
+        }
+    }
+
+    private function razorpayLinkRequest(callable $send): array
+    {
+        if (! $this->isRazorpayConfigured()) {
+            throw new DomainException('Razorpay is not configured, so a payment link cannot be used.');
+        }
+
+        $request = Http::baseUrl(rtrim($this->razorpayConfig['base_url'] ?? 'https://api.razorpay.com/v1', '/'))
+            ->withOptions(['verify' => $this->razorpayConfig['ca_bundle'] ?? true])
+            ->connectTimeout(5)
+            ->timeout(15)
+            ->withBasicAuth($this->razorpayConfig['key_id'], $this->razorpayConfig['key_secret'])
+            ->acceptJson();
+
+        try {
+            $response = $send($request);
+        } catch (\Illuminate\Http\Client\ConnectionException $error) {
+            throw new DomainException('Razorpay could not be reached. Please retry.');
+        }
+
+        if (! $response->successful() || ! is_array($response->json())) {
+            throw new DomainException((string) (data_get($response->json(), 'error.description') ?: 'Razorpay rejected the payment link request.'));
+        }
+
+        return $response->json();
+    }
+
+    /**
+     * Ask Razorpay whether this payment's order was really paid, without relying
+     * on anything from the browser. Returns the Razorpay payment id, or null.
+     */
+    public function findCapturedPaymentId(FlightPayment $payment, ?float $expectedAmount = null): ?string
+    {
+        if (strtolower($payment->gateway ?: '') !== 'razorpay' || ! $payment->gateway_order_id) {
+            return null;
+        }
+        if (! $this->isRazorpayConfigured()) {
+            throw new DomainException('Razorpay is not configured, so the payment cannot be checked.');
+        }
+
+        $baseUrl = rtrim($this->razorpayConfig['base_url'] ?? 'https://api.razorpay.com/v1', '/');
+
+        try {
+            $response = Http::baseUrl($baseUrl)
+                ->withOptions(['verify' => $this->razorpayConfig['ca_bundle'] ?? true])
+                ->connectTimeout(5)
+                ->timeout(15)
+                ->withBasicAuth($this->razorpayConfig['key_id'], $this->razorpayConfig['key_secret'])
+                ->acceptJson()
+                ->get('/orders/' . $payment->gateway_order_id . '/payments');
+        } catch (\Illuminate\Http\Client\ConnectionException $error) {
+            throw new DomainException('Razorpay could not be reached, so the payment was not checked. Please retry.');
+        }
+
+        if (! $response->successful() || ! is_array($response->json())) {
+            throw new DomainException('Razorpay could not check this payment right now. Please retry.');
+        }
+
+        foreach ((array) $response->json('items') as $item) {
+            $paymentId = $item['id'] ?? null;
+            if ($paymentId
+                && in_array($item['status'] ?? null, ['captured', 'authorized'], true)
+                && $this->verifyCapturedPayment($payment, [
+                    'razorpay_payment_id' => $paymentId,
+                    'razorpay_order_id' => $payment->gateway_order_id,
+                ], $expectedAmount)) {
+                return $paymentId;
+            }
+        }
+
+        return null;
     }
 
     /**
