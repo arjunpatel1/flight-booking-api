@@ -600,7 +600,7 @@ class InstallerController extends Controller
         $frontendUrl = rtrim((string) (env('FRONTEND_URL') ?: url('/')), '/');
 
         return view('installer.finish', [
-            'loginUrl' => "{$frontendUrl}/auth/login",
+            'loginUrl' => "{$frontendUrl}/login",
         ]);
     }
 

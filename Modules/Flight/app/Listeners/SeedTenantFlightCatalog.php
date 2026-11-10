@@ -6,11 +6,11 @@ use Modules\Flight\Services\Catalog\FlightReferenceCatalog;
 use Modules\Saas\Models\Tenant;
 
 /**
- * Gives a new tenant its own copy of the standard cabin classes (Economy,
- * Premium Economy, Business, First) so it can create inventory and fares
- * straight away. Airports, airlines and aircraft start empty unless
- * flight.copy_starter_catalog is on, in which case the whole starter set is
- * copied.
+ * A new tenant starts with an empty flight catalog: no airports, airlines,
+ * aircraft or cabin classes. The agency adds the cabin classes it sells
+ * (Fare Families → Cabin Classes) before creating fare families or inventory.
+ *
+ * Only when flight.copy_starter_catalog is on is the whole starter set copied.
  */
 class SeedTenantFlightCatalog
 {
@@ -20,9 +20,10 @@ class SeedTenantFlightCatalog
 
     public function handle(Tenant $tenant): void
     {
-        $this->catalog->copyStarterSet(
-            (int) $tenant->id,
-            config('flight.copy_starter_catalog', false) ? null : ['flight_cabin_classes'],
-        );
+        if (! config('flight.copy_starter_catalog', false)) {
+            return;
+        }
+
+        $this->catalog->copyStarterSet((int) $tenant->id);
     }
 }

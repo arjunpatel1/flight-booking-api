@@ -93,7 +93,10 @@ class SaveSettingRequest extends Request
             SettingSection::Logo => [
                 'logo' => ['bail', 'nullable', 'integer', $this->tenantImageRule()],
                 'invoice_logo' => ['bail', 'nullable', 'integer', $this->tenantImageRule()],
-                'favicon' => ['bail', 'required', 'integer', $this->tenantImageRule()],
+                // Optional: without one the logo is used as the favicon
+                // (SettingService::getAppSettings). Required blocked a new agency,
+                // which has no favicon yet, from changing its logo at all.
+                'favicon' => ['bail', 'nullable', 'integer', $this->tenantImageRule()],
                 'loader_logo' => ['bail', 'nullable', 'integer', $this->tenantImageRule()],
             ],
             SettingSection::Kitchen => [
@@ -210,6 +213,12 @@ class SaveSettingRequest extends Request
                 'admin_delivery_cancelled_notification_enabled' => 'sometimes|boolean',
                 'admin_delivery_failure_notification_enabled' => 'sometimes|boolean',
                 'inventory_low_stock_alerts_enabled' => 'required|boolean',
+            ],
+            // Plain text (shown as text, never as HTML). Empty = page not published.
+            // Refunds have their own page, built from the Cancellation & Refund Policy.
+            SettingSection::Policies => [
+                'policy_terms' => ['nullable', 'string', 'max:60000'],
+                'policy_privacy' => ['nullable', 'string', 'max:60000'],
             ],
             SettingSection::CustomerApp => [
                 'customer_app_enabled' => 'required|boolean',

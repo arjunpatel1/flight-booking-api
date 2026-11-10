@@ -40,6 +40,8 @@ Route::controller(SettingController::class)
             ->middleware(['can:admin.settings.edit', 'throttle:10,1']);
         Route::get('app/settings', 'getAppSettings')->withoutMiddleware(['auth', 'auth:sanctum']);
         Route::get('app/boot-data', 'bootData')->withoutMiddleware(['auth', 'auth:sanctum']);
+        // The agency's Terms and Privacy pages on its customer site (refunds: flight refund policy).
+        Route::get('app/policies/{type}', 'policy')->whereIn('type', ['terms', 'privacy'])->withoutMiddleware(['auth', 'auth:sanctum']);
         // Tenant administrators may invalidate only their frontend/boot cache.
         // Infrastructure-wide maintenance remains protected above.
         Route::post('app/clear-boot-cache', 'clearBootCache')->middleware('can:admin.settings.edit');

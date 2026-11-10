@@ -50,6 +50,10 @@ class ProvisionTenantRequest extends FormRequest
             'primary_color' => ['nullable', 'string', 'max:20'],
             'secondary_color' => ['nullable', 'string', 'max:20'],
             'logo_url' => ['nullable', 'url', 'max:1000'],
+            // Logo file chosen on the onboarding form, sent as a data URL. PNG,
+            // JPEG or WebP only (no SVG: it can carry script); ~2 MB at most.
+            // Stored through MediaService, which re-checks type, content and size.
+            'logo_data' => ['nullable', 'string', 'max:2900000', 'regex:/^data:image\/(png|jpe?g|webp);base64,[A-Za-z0-9+\/=\r\n]+$/'],
             'gst_number' => ['nullable', 'string', 'max:40'],
             'server_automation' => ['nullable', 'array'],
             'server_automation.web_server' => ['nullable', 'string', 'in:apache,nginx'],

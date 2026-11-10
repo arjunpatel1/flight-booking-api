@@ -24,5 +24,7 @@ enum SettingSection: string
     case Appearance = "appearance";
     case SystemConfiguration = "system_configuration";
     case Gst = "gst";
+    /** The agency's own Terms and Privacy policies for its customer site. */
+    case Policies = "policies";
 
 }

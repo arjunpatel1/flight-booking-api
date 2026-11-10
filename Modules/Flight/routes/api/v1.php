@@ -80,6 +80,8 @@ Route::prefix('flight')->group(function () {
 
         // Phase 13: Flight Booking Lifecycle (Public / Guest / Customer)
         Route::post('/bookings', [FlightBookingController::class, 'createBooking']);
+        // Round trip / multi city: every flight booked together, paid once.
+        Route::post('/trips', [FlightBookingController::class, 'createTripBooking']);
 
         // Phase 15 / 21: gateway callbacks are signature-checked, not token-checked.
         Route::post('/payments/webhook/{gateway}', [FlightPaymentController::class, 'webhook']);
@@ -123,6 +125,8 @@ Route::prefix('flight')->group(function () {
     Route::post('/bookings/{identifier}/cancel-servicing', [FlightServicingController::class, 'cancel']);
     Route::get('/bookings/{identifier}/reschedule/search', [FlightServicingController::class, 'searchReplacement']);
     Route::post('/bookings/{identifier}/reschedule', [FlightServicingController::class, 'reschedule']);
+    Route::post('/bookings/{identifier}/reschedule/check-payment', [FlightServicingController::class, 'checkReschedulePayment']);
+    Route::post('/bookings/{identifier}/reschedule/cancel-pending', [FlightServicingController::class, 'cancelPendingReschedule']);
     Route::post('/bookings/{identifier}/refunds/{refundId}/retry', [FlightServicingController::class, 'retryRefund'])->whereNumber('refundId');
     Route::post('/bookings/{identifier}/refunds/{refundId}/mark-processed', [FlightServicingController::class, 'markRefundProcessed'])->whereNumber('refundId');
 

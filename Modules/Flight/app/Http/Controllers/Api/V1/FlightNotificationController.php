@@ -72,7 +72,10 @@ class FlightNotificationController extends Controller
                 'last_page'    => $deliveries->lastPage(),
                 'total'        => $deliveries->total(),
                 'per_page'     => $deliveries->perPage(),
+                'from'         => $deliveries->firstItem() ?? 0,
+                'to'           => $deliveries->lastItem() ?? 0,
             ],
+            'summary' => $this->notificationService->summarizeDeliveries($filters, $tenantId),
         ]);
     }
 

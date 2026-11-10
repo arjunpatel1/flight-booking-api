@@ -56,12 +56,40 @@ class FlightTenantBrand
         }
     }
 
-    /** The logo as a data: URI, for HTML rendered to PDF. */
+    /**
+     * The logo as a data: URI, for HTML rendered to PDF. Without an uploaded
+     * logo, the http(s) logo URL entered when the tenant was created
+     * (restaurant_logo_url) is used instead.
+     */
     public function logoDataUri(?int $tenantId): ?string
     {
         $logo = $this->logo($tenantId);
         $bytes = $logo ? @file_get_contents($logo['path']) : false;
+        if ($bytes) {
+            return 'data:' . $logo['mime'] . ';base64,' . base64_encode($bytes);
+        }
 
-        return $bytes ? 'data:' . $logo['mime'] . ';base64,' . base64_encode($bytes) : null;
+        return $this->onboardingLogoUrl($tenantId);
+    }
+
+    private function onboardingLogoUrl(?int $tenantId): ?string
+    {
+        if (! $tenantId) {
+            return null;
+        }
+
+        try {
+            $payload = DB::table('settings')
+                ->where('setting_scope', "tenant:{$tenantId}")
+                ->where('key', 'restaurant_logo_url')
+                ->value('payload');
+            $url = is_string($payload) ? @unserialize($payload, ['allowed_classes' => false]) : null;
+        } catch (Throwable $e) {
+            report($e);
+
+            return null;
+        }
+
+        return is_string($url) && preg_match('#^https?://#i', trim($url)) ? trim($url) : null;
     }
 }

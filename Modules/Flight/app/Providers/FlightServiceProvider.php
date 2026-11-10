@@ -19,8 +19,8 @@ class FlightServiceProvider extends ServiceProvider
 
         \Illuminate\Support\Facades\Event::subscribe(\Modules\Flight\Listeners\FlightNotificationSubscriber::class);
 
-        // Each new tenant starts with its own copy of the starter airports,
-        // airlines, aircraft and cabin classes.
+        // New tenants start with an empty flight catalog (airports, airlines,
+        // aircraft and cabin classes) unless flight.copy_starter_catalog is on.
         \Modules\Saas\Models\Tenant::created(
             fn (\Modules\Saas\Models\Tenant $tenant) => app(\Modules\Flight\Listeners\SeedTenantFlightCatalog::class)->handle($tenant)
         );

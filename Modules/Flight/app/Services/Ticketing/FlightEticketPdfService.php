@@ -68,118 +68,64 @@ class FlightEticketPdfService
             fn (string $line): string => '<p>' . htmlspecialchars($line, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</p>',
             $advisoryLines
         ));
-        // The logo the agency uploaded in System Settings → Logo; the built-in
-        // CRT Travels mark only when none is uploaded.
+        // The logo the agency uploaded in System Settings → Logo. Without one, the
+        // agency's name is printed as text (set below, once the name is known).
         $brandLogo = app(FlightTenantBrand::class)->logoDataUri($booking->tenant_id ? (int) $booking->tenant_id : null);
-        if ($brandLogo) {
-            $brandLogoPage1 = '<img src="' . $brandLogo . '" alt="Logo" style="height:56px;width:56px;object-fit:contain;border-radius:50%;">';
-            $brandLogoPage2 = '<img src="' . $brandLogo . '" alt="Logo" style="height:44px;width:44px;object-fit:contain;border-radius:50%;">';
-        } else {
-            $brandLogoPage1 = <<<'SVG'
-<svg width="220" height="46" viewBox="0 0 220 46" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <circle cx="22" cy="23" r="19" fill="#0284c7" />
-    <circle cx="22" cy="23" r="15" fill="#0369a1" />
-    <path d="M11 26L20 18L29 20L25 24L33 27L30 29L24 26L20 30L17 29L19 26L11 26Z" fill="#ffffff" />
-    <text x="50" y="22" font-family="'Segoe UI', Arial, sans-serif" font-size="18" font-weight="900" fill="#0369a1" letter-spacing="0.5">CRT Travels</text>
-    <text x="50" y="36" font-family="'Segoe UI', Arial, sans-serif" font-size="9.5" font-weight="600" fill="#64748b" letter-spacing="0.5">Flight Booking Platform</text>
-</svg>
-SVG;
-            $brandLogoPage2 = <<<'SVG'
-<svg width="180" height="38" viewBox="0 0 220 46" fill="none">
-    <circle cx="22" cy="23" r="19" fill="#0284c7" />
-    <circle cx="22" cy="23" r="15" fill="#0369a1" />
-    <path d="M11 26L20 18L29 20L25 24L33 27L30 29L24 26L20 30L17 29L19 26L11 26Z" fill="#ffffff" />
-    <text x="50" y="24" font-family="'Segoe UI', Arial, sans-serif" font-size="19" font-weight="900" fill="#0369a1">CRT Travels</text>
-</svg>
-SVG;
-        }
-        $itinerary = $booking->itinerary ?? [];
-        if (is_string($itinerary)) {
-            $itinerary = json_decode($itinerary, true) ?? [];
-        }
+        // Escaped: it can be a URL typed in at tenant creation, not only a data URI.
+        $brandLogo = $brandLogo ? htmlspecialchars($brandLogo, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') : null;
+        $brandLogoPage1 = $brandLogo ? '<img src="' . $brandLogo . '" alt="Logo" style="height:56px;width:56px;object-fit:contain;border-radius:50%;">' : null;
+        $brandLogoPage2 = $brandLogo ? '<img src="' . $brandLogo . '" alt="Logo" style="height:44px;width:44px;object-fit:contain;border-radius:50%;">' : null;
+        // Every value on the ticket comes from the booking itself (ticketData).
+        // Nothing is invented: a missing value shows as "Not assigned",
+        // "Not yet issued" or similar instead of a made-up seat, time or price.
+        $t = array_map(
+            fn ($value) => is_string($value) ? htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') : $value,
+            $this->ticketData($booking)
+        );
 
-        $pnr = $booking->pnr ?: ($itinerary['pnr'] ?? ($itinerary['pnr_number'] ?? 'HG-12635'));
-        $bookingRef = $booking->booking_reference ?: 'BKNG-' . time();
-
-        // Parse Origin & Destination
-        $originCode = 'BLR';
-        $originCity = 'BENGALURU';
-        $originName = 'KEMPEGOWDA INTL';
-        $destCode = 'BOM';
-        $destCity = 'MUMBAI';
-        $destName = 'CHHATRAPATI S MAHARAJ';
-        $destTerminal = '2';
-
-        if (isset($itinerary['origin'])) {
-            if (is_array($itinerary['origin'])) {
-                $originCode = $itinerary['origin']['code'] ?? $itinerary['origin']['iata_code'] ?? 'BLR';
-                $originCity = strtoupper($itinerary['origin']['city'] ?? 'BENGALURU');
-                $originName = strtoupper($itinerary['origin']['name'] ?? 'KEMPEGOWDA INTL');
-            } else {
-                $originCode = strtoupper($itinerary['origin']);
-                $originCity = $originCode;
-            }
-        } elseif ($booking->flightInventory?->originAirport) {
-            $originCode = $booking->flightInventory->originAirport->iata_code ?? 'BLR';
-            $originCity = strtoupper($booking->flightInventory->originAirport->city ?? 'BENGALURU');
-            $originName = strtoupper($booking->flightInventory->originAirport->name ?? 'KEMPEGOWDA INTL');
-        }
-
-        if (isset($itinerary['destination'])) {
-            if (is_array($itinerary['destination'])) {
-                $destCode = $itinerary['destination']['code'] ?? $itinerary['destination']['iata_code'] ?? 'BOM';
-                $destCity = strtoupper($itinerary['destination']['city'] ?? 'MUMBAI');
-                $destName = strtoupper($itinerary['destination']['name'] ?? 'CHHATRAPATI S MAHARAJ');
-                $destTerminal = $itinerary['destination']['terminal'] ?? '2';
-            } else {
-                $destCode = strtoupper($itinerary['destination']);
-                $destCity = $destCode;
-            }
-        } elseif ($booking->flightInventory?->destinationAirport) {
-            $destCode = $booking->flightInventory->destinationAirport->iata_code ?? 'BOM';
-            $destCity = strtoupper($booking->flightInventory->destinationAirport->city ?? 'MUMBAI');
-            $destName = strtoupper($booking->flightInventory->destinationAirport->name ?? 'CHHATRAPATI S MAHARAJ');
-        }
-
-        $flightNumber = $itinerary['flight_number'] ?? ($booking->flightInventory?->flight_number ?? 'AI604');
-        $airlineName = 'AIR INDIA';
-        if (isset($itinerary['airline'])) {
-            $airlineName = is_array($itinerary['airline']) ? strtoupper($itinerary['airline']['name'] ?? 'AIR INDIA') : strtoupper($itinerary['airline']);
-        } elseif ($booking->flightInventory?->airline) {
-            $airlineName = strtoupper($booking->flightInventory->airline->name ?? 'AIR INDIA');
-        }
-
-        $cabin = strtoupper($itinerary['cabin_class'] ?? ($booking->flightInventory?->cabin_class ?? 'ECONOMY'));
-        $totalAmount = number_format((float) ($booking->total_amount ?: 5000), 0, '.', '');
-        $currency = $booking->currency ?: 'INR';
-
-        // Dates & Times
-        $issueDate = $booking->ticketed_at ? date('dMy', strtotime((string)$booking->ticketed_at)) : ($booking->created_at ? date('dMy', strtotime((string)$booking->created_at)) : date('dMy'));
-        $depTime = $itinerary['departure_time'] ?? ($booking->flightInventory?->departure_time ? date('H:i', strtotime($booking->flightInventory->departure_time)) : '08:20');
-        $arrTime = $itinerary['arrival_time'] ?? ($booking->flightInventory?->arrival_time ? date('H:i', strtotime($booking->flightInventory->arrival_time)) : '10:35');
-        if (strlen($depTime) > 5) $depTime = substr($depTime, 0, 5);
-        if (strlen($arrTime) > 5) $arrTime = substr($arrTime, 0, 5);
-
-        $depDate = isset($itinerary['departure_date']) ? date('dMy', strtotime($itinerary['departure_date'])) : date('dMy');
-        $arrDate = isset($itinerary['arrival_date']) ? date('dMy', strtotime($itinerary['arrival_date'])) : $depDate;
-        $flightDuration = $itinerary['duration'] ?? '02:15';
-
-        // Passengers
-        $firstPax = $booking->passengers->first();
-        $paxFullName = strtoupper($firstPax?->full_name ?? ($booking->contact_name ?: 'GANGA BALAJI'));
-        $paxType = strtoupper($firstPax?->passenger_type?->value ?? 'ADT');
-        $ticketNumber = $firstPax?->ticket?->ticket_number ?? '098 1000000000';
-        $ticketNumber = str_replace('-', ' ', $ticketNumber);
-        $seatNum = $firstPax?->ticket?->seat_number ?? ($firstPax?->seat_preference ?? '12A');
-        $mealPref = $firstPax?->meal_preference ? strtoupper($firstPax->meal_preference) . ' - CONFIRMED' : 'STANDARD IN-FLIGHT SERVICE - CONFIRMED';
-
-        // Pricing breakdown
-        $baseFareNum = (float) ($booking->pricing_breakdown['base_fare'] ?? ($booking->total_amount * 0.8));
-        $taxesNum = (float) ($booking->pricing_breakdown['total_taxes'] ?? ($booking->total_amount * 0.2));
-        if ($baseFareNum <= 0) $baseFareNum = round((float)$totalAmount * 0.8);
-        if ($taxesNum <= 0) $taxesNum = round((float)$totalAmount * 0.2);
-        $baseFare = number_format($baseFareNum, 0, '.', '');
-        $taxes = number_format($taxesNum, 0, '.', '');
+        $pnr = $t['pnr'];
+        $bookingRef = $t['booking_reference'];
+        $originCode = $t['origin_code'];
+        $originCity = $t['origin_city'];
+        $originName = $t['origin_name'];
+        $destCode = $t['dest_code'];
+        $destCity = $t['dest_city'];
+        $destName = $t['dest_name'];
+        $destTerminalHtml = $t['dest_terminal'] !== '' ? '<div class="airport-title">Terminal: ' . $t['dest_terminal'] . '</div>' : '';
+        $originTerminalHtml = $t['origin_terminal'] !== '' ? '<div class="airport-title">Terminal: ' . $t['origin_terminal'] . '</div>' : '';
+        $flightNumber = $t['flight_number'];
+        $airlineName = $t['airline_name'];
+        $cabin = $t['cabin'];
+        $currency = $t['currency'];
+        $totalAmount = $t['total_amount'];
+        $baseFare = $t['base_fare'];
+        $taxes = $t['taxes'];
+        $issueDate = $t['issue_date'];
+        $depTime = $t['dep_time'];
+        $arrTime = $t['arr_time'];
+        $depDate = $t['dep_date'];
+        $arrDate = $t['arr_date'];
+        $flightDurationHtml = $t['duration'] !== '—' ? '<div><span class="sub-lbl">Flight duration:</span> ' . $t['duration'] . '</div>' : '';
+        $paxFullName = $t['passenger_name'];
+        $paxType = $t['passenger_type'];
+        $ticketNumber = $t['ticket_number'];
+        $seatNum = $t['seat'];
+        $mealPref = $t['meal'];
+        $baggageText = $t['baggage'];
+        $fareBasisHtml = $t['fare_basis'] !== '—' ? '<div><span class="sub-lbl">Fare:</span> ' . $t['fare_basis'] . '</div>' : '';
+        $bookingStatus = $t['booking_status'];
+        $paymentMode = $t['payment_mode'];
+        $agencyName = $t['agency_name'];
+        $agencyNameUpper = mb_strtoupper($t['agency_name']);
+        $agencyContactHtml = implode('', array_filter([
+            $t['agency_phone'] !== '' ? '<div>Phone: ' . $t['agency_phone'] . '</div>' : '',
+            $t['agency_email'] !== '' ? '<div>Email: ' . $t['agency_email'] . '</div>' : '',
+        ]));
+        $brandLogoPage1 ??= '<div style="font-family:Segoe UI,Arial,sans-serif;font-size:20px;font-weight:900;color:#0369a1;">' . $agencyName . '</div>';
+        $brandLogoPage2 ??= '<div style="font-family:Segoe UI,Arial,sans-serif;font-size:17px;font-weight:900;color:#0369a1;">' . $agencyName . '</div>';
+        $manageBookingHtml = $t['manage_url'] !== ''
+            ? '<p>View or download this ticket any time under My Bookings at <a href="' . $t['manage_url'] . '" target="_blank">' . $t['manage_label'] . '</a>.</p>'
+            : '';
 
         return <<<HTML
 <!DOCTYPE html>
@@ -549,7 +495,7 @@ SVG;
             </div>
             <div class="meta-col right">
                 <div><span>Issuing office:</span></div>
-                <div><span>CRT TRAVELS INDIA</span></div>
+                <div><span class="bold">{$agencyNameUpper}</span></div>
                 <div style="margin-top: 3px;"><span>Date of issue:</span> <span class="bold">{$issueDate}</span></div>
             </div>
         </div>
@@ -562,7 +508,7 @@ SVG;
         <!-- Advisory -->
         <div class="advisory">
             <p>You must present this receipt along with a valid government photo identification (Passport / Aadhaar / National ID) to enter the airport.</p>
-            <p>Please check flight real-time status and baggage policies at <a href="http://localhost:3101/flights" target="_blank">www.crttravels.com</a></p>
+            {$manageBookingHtml}
         </div>
 
         <!-- Flight Itinerary Table -->
@@ -581,11 +527,12 @@ SVG;
                     <td>
                         <div class="city-title">{$originCity}</div>
                         <div class="airport-title">{$originName} ({$originCode})</div>
+                        {$originTerminalHtml}
                     </td>
                     <td>
                         <div class="city-title">{$destCity}</div>
                         <div class="airport-title">{$destName} ({$destCode})</div>
-                        <div class="airport-title">Terminal: {$destTerminal}</div>
+                        {$destTerminalHtml}
                     </td>
                     <td>
                         <div class="flight-code">{$flightNumber}</div>
@@ -605,28 +552,28 @@ SVG;
                         <div class="sub-grid">
                             <div>
                                 <div><span class="sub-lbl">Class:</span> {$cabin}</div>
-                                <div><span class="sub-lbl">Baggage:</span> 15KG Check-in / 7KG Hand</div>
-                                <div><span class="sub-lbl">Fare basis:</span> STANDARD-WEB</div>
+                                <div><span class="sub-lbl">Baggage:</span> {$baggageText}</div>
+                                {$fareBasisHtml}
                             </div>
                             <div>
                                 <div><span class="sub-lbl">Operated by:</span> {$airlineName}</div>
-                                <div><span class="sub-lbl">Marketed by:</span> CRT TRAVELS</div>
+                                <div><span class="sub-lbl">Issued by:</span> {$agencyNameUpper}</div>
                             </div>
                             <div>
-                                <div><span class="sub-lbl">Booking status:</span> CONFIRMED / OK</div>
+                                <div><span class="sub-lbl">Booking status:</span> {$bookingStatus}</div>
                                 <div><span class="sub-lbl">Seat:</span> {$seatNum}</div>
-                                <div><span class="sub-lbl">Flight duration:</span> {$flightDuration}</div>
+                                {$flightDurationHtml}
                             </div>
                         </div>
                         <div class="ssr-line">
-                            <span class="sub-lbl">Special Service Request:</span> {$mealPref}
+                            <span class="sub-lbl">Meal request:</span> {$mealPref}
                         </div>
                     </td>
                 </tr>
             </tbody>
         </table>
         <div class="table-footnotes">
-            (1) OK = Confirmed Seat Guarantee &nbsp;&nbsp;&nbsp; (2) Checked baggage allowance strictly as per airline fare rules
+            Seats are allocated at check-in unless a seat number is shown above. Baggage allowance is as per the fare rules of this booking.
         </div>
 
         <!-- Payment & Fare Breakdown -->
@@ -635,15 +582,11 @@ SVG;
                 <div class="finance-h4">PAYMENT DETAILS</div>
                 <div class="finance-row">
                     <span>Payment Mode:</span>
-                    <span>ONLINE / GATEWAY VERIFIED</span>
+                    <span>{$paymentMode}</span>
                 </div>
                 <div class="finance-row">
                     <span>Reference:</span>
                     <span>{$bookingRef}</span>
-                </div>
-                <div class="finance-row">
-                    <span>Endorsements:</span>
-                    <span>NON-END VLD ON FLT ONLY</span>
                 </div>
             </div>
             <div>
@@ -742,20 +685,19 @@ SVG;
             <div class="configured-advisory">{$advisoryHtml}</div>
 
             <div class="wish-text">
-                Thank you for choosing CRT Travels. We wish you a safe and pleasant flight!
+                Thank you for choosing {$agencyName}. We wish you a safe and pleasant flight!
             </div>
 
             <div class="sys-disclaimer">
-                THIS IS A COMPUTER-GENERATED ELECTRONIC TICKET RECEIPT ISSUED UNDER AIRLINE CARRIAGE REGULATIONS. NO PHYSICAL SIGNATURE IS REQUIRED.
+                THIS IS A COMPUTER-GENERATED ELECTRONIC TICKET RECEIPT. NO PHYSICAL SIGNATURE IS REQUIRED.
             </div>
 
             <div class="alliance-bottom-banner">
                 <div class="banner-slogan" style="color: #0369a1;">
-                    CRT TRAVELS GLOBAL NETWORK<br><span style="font-size: 10px; color: #64748b; font-weight: normal;">Reliable, verified, seamless flight bookings worldwide.</span>
+                    {$agencyNameUpper}<br><span style="font-size: 10px; color: #64748b; font-weight: normal;">Issued by {$agencyName}</span>
                 </div>
                 <div class="banner-credits">
-                    <div>24/7 Support: support@crttravels.com</div>
-                    <div style="font-weight: bold; color: #0369a1; font-size: 10px; margin-top: 3px;">IATA VERIFIED TICKETING</div>
+                    {$agencyContactHtml}
                 </div>
             </div>
         </div>
@@ -766,38 +708,278 @@ HTML;
     }
 
     /**
-     * Pure PHP standard PDF-1.4 generator fallback.
+     * Everything printed on the e-ticket, read from the booking, its fare,
+     * inventory, passengers and tickets, plus the agency's name and onboarding
+     * contact. Values are raw (not HTML-escaped). When something is genuinely
+     * unknown it is labelled as such ("Not assigned", "Not yet issued", "—")
+     * instead of being filled with a sample value.
+     *
+     * @return array<string, string>
      */
-    public function generatePurePdf(FlightBooking $booking): string
+    public function ticketData(FlightBooking $booking): array
     {
-        $pnr = $booking->pnr ?: 'HG-12635';
-        $ref = $booking->booking_reference ?: 'BKNG-' . time();
+        $booking->loadMissing(['passengers.ticket', 'tickets', 'flightFare.fareFamily', 'flightInventory.airline', 'flightInventory.originAirport', 'flightInventory.destinationAirport']);
+
         $itinerary = $booking->itinerary ?? [];
         if (is_string($itinerary)) {
             $itinerary = json_decode($itinerary, true) ?? [];
         }
-
-        $flightNo = $itinerary['flight_number'] ?? 'AI604';
-        $origin = 'BENGALURU';
-        $dest = 'MUMBAI';
-        if (isset($itinerary['origin'])) {
-            $origin = is_array($itinerary['origin']) ? ($itinerary['origin']['city'] ?? 'BENGALURU') : $itinerary['origin'];
+        $fareSnapshot = $booking->fare_snapshot ?? [];
+        if (is_string($fareSnapshot)) {
+            $fareSnapshot = json_decode($fareSnapshot, true) ?? [];
         }
-        if (isset($itinerary['destination'])) {
-            $dest = is_array($itinerary['destination']) ? ($itinerary['destination']['city'] ?? 'MUMBAI') : $itinerary['destination'];
+        $pricing = $booking->pricing_breakdown ?? [];
+        if (is_string($pricing)) {
+            $pricing = json_decode($pricing, true) ?? [];
+        }
+        $inventory = $booking->flightInventory;
+        $dash = '—';
+
+        $upper = fn ($value): string => mb_strtoupper(trim((string) $value));
+        $first = function (...$values): string {
+            foreach ($values as $value) {
+                if (is_scalar($value) && trim((string) $value) !== '') {
+                    return trim((string) $value);
+                }
+            }
+
+            return '';
+        };
+
+        // Route
+        // Itineraries store the route either as origin/destination objects or as
+        // flat departure_airport / arrival_airport codes.
+        $place = function (string $key, string $flatKey, $airport) use ($itinerary, $first, $upper): array {
+            $node = $itinerary[$key] ?? ($itinerary[$flatKey] ?? null);
+            if (is_string($node)) {
+                $node = ['code' => $node];
+            }
+            $node = is_array($node) ? $node : [];
+
+            return [
+                'code' => $upper($first($node['code'] ?? null, $node['iata_code'] ?? null, $airport?->iata_code)),
+                'city' => $upper($first($node['city'] ?? null, $airport?->city)),
+                'name' => $upper($first($node['name'] ?? null, $airport?->name)),
+                'terminal' => $first($node['terminal'] ?? null),
+            ];
+        };
+        $origin = $place('origin', 'departure_airport', $inventory?->originAirport);
+        $dest = $place('destination', 'arrival_airport', $inventory?->destinationAirport);
+
+        $airline = $itinerary['airline'] ?? null;
+        $airlineName = $upper($first(is_array($airline) ? ($airline['name'] ?? null) : $airline, $itinerary['airline_name'] ?? null, $inventory?->airline?->name));
+        $flightNumber = $first($itinerary['flight_number'] ?? null, $inventory?->flight_number);
+
+        // Dates and times (H:i), with the arrival date rolled to the next day for
+        // overnight flights when no arrival date is stored.
+        $clock = function ($value): string {
+            $value = trim((string) $value);
+            if ($value === '') {
+                return '';
+            }
+            if (preg_match('/(\d{1,2}):(\d{2})/', $value, $m)) {
+                return sprintf('%02d:%s', (int) $m[1], $m[2]);
+            }
+
+            return '';
+        };
+        $depTime = $clock($first($itinerary['departure_time'] ?? null, $itinerary['departure']['time'] ?? null, $inventory?->departure_time));
+        $arrTime = $clock($first($itinerary['arrival_time'] ?? null, $itinerary['arrival']['time'] ?? null, $inventory?->arrival_time));
+        $depDateRaw = $first($itinerary['departure_date'] ?? null, $itinerary['departure']['date'] ?? null, data_get($booking->meta, 'departure_date'), data_get($booking->hold?->meta, 'departure_date'));
+        $arrDateRaw = $first($itinerary['arrival_date'] ?? null, $itinerary['arrival']['date'] ?? null);
+        $depTs = $depDateRaw !== '' ? strtotime(substr($depDateRaw, 0, 10)) : false;
+        $arrTs = $arrDateRaw !== '' ? strtotime(substr($arrDateRaw, 0, 10)) : false;
+        if (! $arrTs && $depTs) {
+            $arrTs = ($depTime !== '' && $arrTime !== '' && $arrTime < $depTime) ? strtotime('+1 day', $depTs) : $depTs;
+        }
+        $fmtDate = fn ($ts): string => $ts ? date('d M Y', $ts) : '';
+
+        // Only a stored duration: departure and arrival are local times in
+        // different time zones, so subtracting them would give a wrong figure.
+        $duration = $first($itinerary['duration'] ?? null);
+
+        $issuedAt = $booking->ticketed_at ?: $booking->confirmed_at ?: $booking->created_at;
+
+        // Passenger and ticket
+        $pax = $booking->passengers->first();
+        $paxType = $pax?->passenger_type;
+        $paxType = $upper(is_object($paxType) && property_exists($paxType, 'value') ? $paxType->value : $paxType);
+        $ticketNumber = $first($pax?->ticket?->ticket_number, $booking->tickets->first()?->ticket_number);
+        $seat = $first($pax?->ticket?->seat_number, $pax?->seat_preference);
+        $meal = $first($pax?->meal_preference);
+
+        // Baggage: the booked fare family's allowance, then the fare, then the snapshot.
+        $familyBaggage = (array) ($booking->flightFare?->fareFamily?->baggage_allowance ?? []);
+        $fareBaggage = (array) ($booking->flightFare?->baggage ?? []);
+        $rules = (array) ($fareSnapshot['rules'] ?? []);
+        $inventoryBaggage = (array) ($inventory?->baggage_policy ?? []);
+        $kgOrNull = function (...$values): ?float {
+            foreach ($values as $value) {
+                if ($value !== null && $value !== '' && is_numeric($value)) {
+                    return (float) $value;
+                }
+            }
+
+            return null;
+        };
+        $checkinKg = $kgOrNull($familyBaggage['checkin_kg'] ?? null, $fareBaggage['checkin_kg'] ?? null, $rules['checkin_kg'] ?? null, $rules['baggage_kg'] ?? null, $inventoryBaggage['checkin_kg'] ?? null);
+        $cabinKg = $kgOrNull($familyBaggage['cabin_kg'] ?? null, $fareBaggage['cabin_kg'] ?? null, $rules['cabin_kg'] ?? null, $inventoryBaggage['cabin_kg'] ?? null);
+        $kgText = fn (?float $kg): string => $kg === null ? '' : ($kg <= 0 ? 'None' : rtrim(rtrim(number_format($kg, 1, '.', ''), '0'), '.') . ' kg');
+        $baggageParts = array_filter([
+            $checkinKg !== null ? 'Check-in: ' . $kgText($checkinKg) : '',
+            $cabinKg !== null ? 'Cabin: ' . $kgText($cabinKg) : '',
+        ]);
+
+        $fareFamilyName = $first($booking->flightFare?->fareFamily?->name, $fareSnapshot['fare_family']['name'] ?? null);
+        $fareBasis = $first($fareSnapshot['fare_code'] ?? null, $booking->flightFare?->fare_basis_code, $fareFamilyName);
+
+        // Prices: only what the booking recorded; no invented base/tax split.
+        $currency = $first($booking->currency, 'INR');
+        $money = fn ($amount): string => number_format((float) $amount, 0, '.', ',');
+        $total = (float) ($booking->total_amount ?? 0);
+        $baseFare = $pricing['base_fare'] ?? null;
+        $taxAmount = isset($pricing['total_taxes'])
+            ? (float) $pricing['total_taxes']
+            : (isset($pricing['taxes']) || isset($pricing['gst']) ? (float) ($pricing['taxes'] ?? 0) + (float) ($pricing['gst'] ?? 0) : null);
+
+        // Statuses as recorded
+        $statusValue = fn ($status): string => is_object($status) && property_exists($status, 'value') ? (string) $status->value : (string) $status;
+        $bookingStatus = str_replace('_', ' ', $upper($statusValue($booking->booking_status)));
+        $paymentStatus = $upper($statusValue($booking->payment_status));
+
+        $agency = $this->agencyDetails($booking);
+
+        return [
+            'pnr' => $first($booking->pnr, $booking->supplier_pnr, $itinerary['pnr'] ?? null, $itinerary['pnr_number'] ?? null) ?: 'Pending',
+            'booking_reference' => $first($booking->booking_reference) ?: $dash,
+            'origin_code' => $origin['code'] ?: $dash,
+            'origin_city' => $origin['city'] ?: ($origin['code'] ?: $dash),
+            'origin_name' => $origin['name'] ?: ($origin['code'] ?: $dash),
+            'origin_terminal' => $origin['terminal'],
+            'dest_code' => $dest['code'] ?: $dash,
+            'dest_city' => $dest['city'] ?: ($dest['code'] ?: $dash),
+            'dest_name' => $dest['name'] ?: ($dest['code'] ?: $dash),
+            'dest_terminal' => $dest['terminal'],
+            'flight_number' => $flightNumber ?: $dash,
+            'airline_name' => $airlineName ?: $dash,
+            'cabin' => $upper($first($itinerary['cabin_class'] ?? null, $rules['cabin_class'] ?? null, $inventory?->cabin_class)) ?: $dash,
+            'currency' => $currency,
+            'total_amount' => $money($total),
+            'base_fare' => $baseFare !== null ? $money($baseFare) : $dash,
+            'taxes' => $taxAmount !== null ? $money($taxAmount) : $dash,
+            'issue_date' => $issuedAt ? date('d M Y', strtotime((string) $issuedAt)) : $dash,
+            'dep_time' => $depTime ?: $dash,
+            'arr_time' => $arrTime ?: $dash,
+            'dep_date' => $fmtDate($depTs),
+            'arr_date' => $fmtDate($arrTs),
+            'duration' => $duration ?: $dash,
+            'passenger_name' => $upper($first($pax?->full_name, $booking->contact_name)) ?: $dash,
+            'passenger_type' => $paxType ?: 'ADULT',
+            'ticket_number' => $ticketNumber !== '' ? str_replace('-', ' ', $ticketNumber) : 'Pending',
+            'seat' => $seat !== '' ? $upper($seat) : 'Not assigned (at check-in)',
+            'meal' => $meal !== '' ? $upper($meal) : 'None requested',
+            'baggage' => $baggageParts ? implode(' / ', $baggageParts) : 'As per fare rules',
+            'fare_basis' => $fareBasis !== '' ? $upper($fareBasis) : $dash,
+            'booking_status' => $bookingStatus ?: $dash,
+            'payment_mode' => $paymentStatus === 'PAID' ? 'Paid online' : ($paymentStatus !== '' ? ucfirst(strtolower($paymentStatus)) : $dash),
+            'agency_name' => $agency['name'],
+            'agency_email' => $agency['email'],
+            'agency_phone' => $agency['phone'],
+            'manage_url' => $agency['manage_url'],
+            'manage_label' => $agency['manage_label'],
+        ];
+    }
+
+    /**
+     * The issuing agency: its App Name setting (falls back to the onboarding
+     * name), onboarding contact email/phone, and its customer site's My Bookings
+     * link when it has its own domain.
+     *
+     * @return array{name: string, email: string, phone: string, manage_url: string, manage_label: string}
+     */
+    private function agencyDetails(FlightBooking $booking): array
+    {
+        $tenant = $booking->tenant_id
+            ? Tenant::query()->withoutGlobalScopes()->find($booking->tenant_id, ['id', 'name', 'domain', 'contact_email', 'contact_phone'])
+            : null;
+
+        $name = $tenant ? $this->tenantAppName((int) $tenant->id) : '';
+        if ($name === '') {
+            $name = trim((string) ($tenant?->name ?? ''));
+        }
+        if ($name === '') {
+            $name = trim((string) config('app.name', 'Flight Booking'));
         }
 
-        $total = number_format((float) ($booking->total_amount ?: 5000), 2);
-        $curr = $booking->currency ?: 'INR';
+        $domain = trim((string) ($tenant?->domain ?? ''));
+        $domain = preg_replace('#^https?://#i', '', rtrim($domain, '/')) ?? '';
 
-        $paxName = strtoupper($booking->contact_name ?: ($booking->passengers->first()?->full_name ?: 'GANGA BALAJI'));
+        return [
+            'name' => $name,
+            'email' => trim((string) ($tenant?->contact_email ?? '')),
+            'phone' => trim((string) ($tenant?->contact_phone ?? '')),
+            'manage_url' => $domain !== '' ? (request()?->isSecure() ? 'https' : 'http') . '://' . $domain . '/customer/bookings' : '',
+            'manage_label' => $domain,
+        ];
+    }
 
-        $textStream1 = "BT /F1 16 Tf 50 800 Td (CRT TRAVELS - ELECTRONIC TICKET ITINERARY / RECEIPT) Tj ET\n"
-            . "BT /F1 11 Tf 50 760 Td (Booking Reference: {$pnr}   |   Reference: {$ref}) Tj ET\n"
-            . "BT /F1 11 Tf 50 735 Td (Flight: {$flightNo}   |   Route: {$origin} to {$dest}) Tj ET\n"
-            . "BT /F1 11 Tf 50 710 Td (Passenger: {$paxName}   |   Seat: 12A) Tj ET\n"
-            . "BT /F1 11 Tf 50 685 Td (Total Amount: {$curr} {$total}   |   Status: CONFIRMED / OK) Tj ET\n"
-            . "BT /F1 8 Tf 50 650 Td (Carriage of hazardous materials aboard aircraft is forbidden by civil aviation regulations.) Tj ET\n";
+    /** The tenant's App Name setting as plain text ('' when unset). */
+    private function tenantAppName(int $tenantId): string
+    {
+        try {
+            $context = app(\Modules\Saas\Support\TenantContext::class);
+            $settings = app(\Modules\Setting\Services\Setting\SettingServiceInterface::class);
+            $previous = $context->id();
+            $switch = (int) $previous !== $tenantId;
+            if ($switch) {
+                $context->setId($tenantId);
+                $settings->refreshSettingBinding();
+            }
+            try {
+                $value = setting('app_name');
+            } finally {
+                if ($switch) {
+                    $context->setId($previous);
+                    $settings->refreshSettingBinding();
+                }
+            }
+        } catch (Throwable) {
+            return '';
+        }
+
+        if (is_array($value)) {
+            $value = $value[app()->getLocale()]
+                ?? $value[(string) config('app.fallback_locale')]
+                ?? collect($value)->first(fn ($text) => is_string($text) && trim($text) !== '');
+        }
+
+        return is_scalar($value) ? trim((string) $value) : '';
+    }
+
+    /**
+     * Pure PHP standard PDF-1.4 generator fallback.
+     */
+    public function generatePurePdf(FlightBooking $booking): string
+    {
+        // Same booking data as the HTML ticket; nothing invented.
+        $d = array_map(fn ($value) => is_string($value) ? $this->pdfEscape($value) : $value, $this->ticketData($booking));
+        $agency = mb_strtoupper($d['agency_name']);
+        $lines = [
+            [16, "{$agency} - ELECTRONIC TICKET ITINERARY / RECEIPT"],
+            [11, "PNR: {$d['pnr']}   |   Reference: {$d['booking_reference']}"],
+            [11, "Flight: {$d['flight_number']} {$d['airline_name']}   |   {$d['origin_city']} ({$d['origin_code']}) to {$d['dest_city']} ({$d['dest_code']})"],
+            [11, "Departs: {$d['dep_date']} {$d['dep_time']}   |   Arrives: {$d['arr_date']} {$d['arr_time']}"],
+            [11, "Passenger: {$d['passenger_name']}   |   Ticket: {$d['ticket_number']}   |   Seat: {$d['seat']}"],
+            [11, "Baggage: {$d['baggage']}   |   Class: {$d['cabin']}"],
+            [11, "Total: {$d['currency']} {$d['total_amount']}   |   Status: {$d['booking_status']}"],
+            [8, 'Carriage of hazardous materials aboard aircraft is forbidden by civil aviation regulations.'],
+        ];
+        $textStream1 = '';
+        $y = 800;
+        foreach ($lines as [$size, $text]) {
+            $textStream1 .= "BT /F1 {$size} Tf 50 {$y} Td ({$text}) Tj ET\n";
+            $y -= $size >= 16 ? 40 : 25;
+        }
 
         $textStream2 = "BT /F1 14 Tf 50 800 Td (IMPORTANT TRAVEL ADVISORY & CARRIER CONDITIONS) Tj ET\n";
         $lineY = 765;

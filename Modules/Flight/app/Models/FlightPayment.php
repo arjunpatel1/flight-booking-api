@@ -22,6 +22,7 @@ class FlightPayment extends Model
     protected $fillable = [
         'tenant_id',
         'flight_booking_id',
+        'trip_reference',
         'flight_fare_quote_id',
         'flight_hold_id',
         'user_id',

@@ -47,6 +47,24 @@ enum DefaultRole: string
         ];
     }
 
+    /**
+     * Roles a platform admin may assign to a tenant's staff from the SaaS
+     * tenant workspace: the branch roles plus the flight agency roles.
+     * Kept separate from getBranchAvailableRoles(), which also drives the
+     * tenant's own user form and role listings.
+     *
+     * @return array
+     */
+    public static function getTenantAssignableRoles(): array
+    {
+        return [
+            ...self::getBranchAvailableRoles(),
+            DefaultRole::FlightAdmin->value,
+            DefaultRole::FlightDistributor->value,
+            DefaultRole::FlightAgent->value,
+        ];
+    }
+
     /** @inheritDoc */
     public static function getTransKey(): string
     {
@@ -99,6 +117,63 @@ enum DefaultRole: string
         }
 
         return (array) $permissions;
+    }
+
+    /**
+     * Permission areas (admin.<area>.*) a flight agency uses, besides every
+     * admin.flight_* area. Everything else in the registry is a restaurant
+     * module (POS, cart, tables, kitchen, menus, loyalty, payroll, ...).
+     * Mirrored in the web app's src/utils/planFeatures.ts.
+     *
+     * @return array
+     */
+    public static function flightAgencyPermissionAreas(): array
+    {
+        // Not listed (restaurant sections the flight sidebar hides): dashboards,
+        // customers, payments, invoices, discounts, reports, whatsapp (marketing).
+        return [
+            // Flight coupons and discounts are guarded by admin.vouchers.
+            'vouchers',
+            'users', 'roles', 'profiles', 'notifications', 'settings', 'appearance',
+            'branches', 'activity_logs', 'authentication_logs', 'media', 'translations',
+            'currency_rates', 'imports',
+        ];
+    }
+
+    public static function isFlightAgencyPermission(string $permission): bool
+    {
+        $area = Str::of($permission)->after('admin.')->before('.')->toString();
+
+        return Str::startsWith($area, 'flight') || in_array($area, self::flightAgencyPermissionAreas(), true);
+    }
+
+    /**
+     * The permissions this role is synced to. The agency staff roles keep only
+     * flight-agency permissions (no restaurant modules); the Tenant
+     * Administrator also gets every flight permission so it can run the agency.
+     *
+     * @param array $allPermissions
+     * @return array
+     */
+    public function effectivePermissions(array $allPermissions): array
+    {
+        $permissions = self::expandPermissions($this->getPermissions(), $allPermissions);
+
+        if (! in_array($this, [self::EnterpriseAdmin, self::AdminBranch, self::Manager], true)) {
+            return $permissions;
+        }
+
+        if ($this === self::AdminBranch) {
+            $permissions = [
+                ...$permissions,
+                ...array_filter($allPermissions, fn (string $permission) => Str::startsWith($permission, 'admin.flight_')),
+            ];
+        }
+
+        return array_values(array_unique(array_filter(
+            $permissions,
+            fn (string $permission) => self::isFlightAgencyPermission($permission),
+        )));
     }
 
     /**

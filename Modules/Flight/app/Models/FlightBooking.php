@@ -47,6 +47,8 @@ class FlightBooking extends Model
 
     protected $fillable = [
         'booking_reference',
+        'trip_reference',
+        'trip_leg',
         'pnr',
         'tenant_id',
         'user_id',

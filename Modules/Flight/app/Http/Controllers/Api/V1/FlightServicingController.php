@@ -8,6 +8,7 @@ use Illuminate\Http\Request;
 use Modules\Core\Http\Controllers\Controller;
 use Modules\Flight\Enums\RefundStatus;
 use Modules\Flight\Models\FlightBooking;
+use Modules\Flight\Services\Booking\FlightBookingService;
 use Modules\Flight\Services\Servicing\FlightServicingService;
 use Modules\Saas\Support\TenantContext;
 
@@ -71,6 +72,23 @@ class FlightServicingController extends Controller
         $actor = $request->user()?->email ?? 'agent';
 
         try {
+            if ($this->servicingService->isUnpaid($booking)) {
+                app(FlightBookingService::class)->cancelUnpaidBooking($booking, $reason);
+
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Booking cancelled. No payment was received, so there is nothing to refund.',
+                    'body'    => [
+                        'success'           => true,
+                        'booking_reference' => $booking->booking_reference,
+                        'status'            => 'CANCELLED',
+                        'cancellation_fee'  => 0,
+                        'refund_amount'     => 0,
+                        'refund_status'     => 'NONE',
+                    ],
+                ]);
+            }
+
             $result = $this->servicingService->cancelBooking($booking, $reason, $actor);
 
             return response()->json([
@@ -119,6 +137,7 @@ class FlightServicingController extends Controller
         $request->validate([
             'new_inventory_id' => 'required|integer',
             'new_fare_id'      => 'nullable|integer',
+            'departure_date'   => 'nullable|date_format:Y-m-d',
             'reason'           => 'nullable|string',
         ]);
 
@@ -136,14 +155,17 @@ class FlightServicingController extends Controller
                 $newInventoryId,
                 $newFareId,
                 $reason,
-                $actor
+                $actor,
+                $request->input('departure_date')
             );
 
             $summary = $this->servicingService->getServicingSummary($updated);
 
             return response()->json([
                 'success' => true,
-                'message' => 'Flight booking successfully rescheduled to new flight.',
+                'message' => $summary['pending_reschedule']
+                    ? 'The seat is held and a payment link was sent to the customer. The booking moves once they pay.'
+                    : 'Flight booking successfully rescheduled to new flight.',
                 'body'    => $summary,
             ]);
         } catch (DomainException $e) {
@@ -152,6 +174,55 @@ class FlightServicingController extends Controller
                 'message' => $e->getMessage(),
             ], 422);
         }
+    }
+
+    /**
+     * Ask Razorpay whether the reschedule's payment link was paid.
+     * POST /api/v1/flight/bookings/{identifier}/reschedule/check-payment
+     */
+    public function checkReschedulePayment(Request $request, string $identifier): JsonResponse
+    {
+        $booking = $this->resolveBooking($identifier, app(TenantContext::class)->id());
+
+        try {
+            $outcome = $this->servicingService->checkPendingReschedule($booking);
+        } catch (DomainException $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => match ($outcome) {
+                'paid' => 'Payment received. The booking has moved to the new flight.',
+                'released' => 'The payment link has ended, so the held seat was released.',
+                'pending' => 'The customer has not paid yet.',
+                default => 'No payment link is waiting for this booking.',
+            },
+            'body' => $this->servicingService->getServicingSummary($booking->fresh()),
+        ]);
+    }
+
+    /**
+     * Cancel the reschedule's payment link and release its held seat.
+     * POST /api/v1/flight/bookings/{identifier}/reschedule/cancel-pending
+     */
+    public function cancelPendingReschedule(Request $request, string $identifier): JsonResponse
+    {
+        $booking = $this->resolveBooking($identifier, app(TenantContext::class)->id());
+
+        try {
+            $outcome = $this->servicingService->settlePendingReschedule($booking);
+        } catch (DomainException $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => $outcome === 'paid'
+                ? 'The customer had already paid, so the booking has moved to the new flight.'
+                : 'The payment link was cancelled and the held seat was released.',
+            'body' => $this->servicingService->getServicingSummary($booking->fresh()),
+        ]);
     }
 
     /**

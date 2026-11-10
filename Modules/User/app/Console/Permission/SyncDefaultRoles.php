@@ -88,15 +88,20 @@ class SyncDefaultRoles extends Command
     {
         $allPermission = Permission::getPermissionNames();
 
+        // Roles a platform admin edited (Tenant workspace → Roles & permissions)
+        // keep their hand-picked permissions until reset to defaults.
         $roles = Role::whereIn('name', DefaultRole::values())
             ->whereNot("name", DefaultRole::SuperAdmin->value)
+            ->when(
+                \Illuminate\Support\Facades\Schema::hasColumn((new Role)->getTable(), 'permissions_customized'),
+                fn ($query) => $query->where('permissions_customized', false),
+            )
             ->get();
 
 
         /** @var Role $role */
         foreach ($roles as $role) {
-            $rolePermission = DefaultRole::from($role->name)->getPermissions();
-            $role->syncPermissions(DefaultRole::expandPermissions($rolePermission, $allPermission));
+            $role->syncPermissions(DefaultRole::from($role->name)->effectivePermissions($allPermission));
         }
     }
 

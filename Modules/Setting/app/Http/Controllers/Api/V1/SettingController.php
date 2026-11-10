@@ -208,6 +208,20 @@ class SettingController extends Controller
     }
 
     /**
+     * One of the agency's customer-site policies (Settings → Policies), as
+     * plain text. 404 when the agency hasn't written it.
+     * GET /api/v1/app/policies/{type}  (terms | privacy)
+     */
+    public function policy(string $type): JsonResponse
+    {
+        $policy = app(\Modules\Setting\Services\Setting\SettingService::class)->policy($type);
+
+        return $policy
+            ? ApiResponse::success($policy)
+            : ApiResponse::errors(null, 'This policy has not been published.', 404);
+    }
+
+    /**
      * Get cached boot data for frontend initialization.
      */
     public function bootData(): JsonResponse

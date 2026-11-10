@@ -154,9 +154,31 @@ class FlightNotificationService
      */
     public function listDeliveries(array $filters = [], ?int $tenantId = null, int $perPage = 20): LengthAwarePaginator
     {
-        $query = FlightNotificationDelivery::query()
+        return $this->filteredDeliveries($filters, $tenantId)
             ->with('booking')
-            ->forTenant($tenantId);
+            ->orderBy('id', 'desc')
+            ->paginate(max(1, min(100, $perPage)));
+    }
+
+    /** Counts across every matching delivery, not just the page on screen. */
+    public function summarizeDeliveries(array $filters = [], ?int $tenantId = null): array
+    {
+        $counts = $this->filteredDeliveries($filters, $tenantId)
+            ->selectRaw('status, COUNT(*) as total')
+            ->groupBy('status')
+            ->pluck('total', 'status');
+        $count = fn (array $statuses) => (int) collect($statuses)->sum(fn ($status) => (int) ($counts[$status] ?? 0));
+
+        return [
+            'delivered' => $count(['SENT', 'DELIVERED']),
+            'queued'    => $count(['QUEUED', 'PENDING', 'RETRYING']),
+            'failed'    => $count(['FAILED']),
+        ];
+    }
+
+    private function filteredDeliveries(array $filters, ?int $tenantId): \Illuminate\Database\Eloquent\Builder
+    {
+        $query = FlightNotificationDelivery::query()->forTenant($tenantId);
 
         if (! empty($filters['event'])) {
             $query->where('event', $filters['event']);
@@ -175,11 +197,12 @@ class FlightNotificationService
         }
 
         if (! empty($filters['booking_reference'])) {
+            // Part of a reference is enough, so the search works while typing.
             $query->whereHas('booking', function ($q) use ($filters) {
-                $q->where('booking_reference', $filters['booking_reference']);
+                $q->where('booking_reference', 'like', '%' . trim((string) $filters['booking_reference']) . '%');
             });
         }
 
-        return $query->orderBy('id', 'desc')->paginate($perPage);
+        return $query;
     }
 }

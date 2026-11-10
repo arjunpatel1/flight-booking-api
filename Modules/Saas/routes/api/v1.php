@@ -127,6 +127,12 @@ Route::middleware(EnsurePlatformActor::class)->group(function () {
             Route::get('/tenants/{tenant}/access', 'tenantAccess')->middleware('can:admin.saas.index');
             Route::post('/tenants/{tenant}/sync-permissions', 'syncTenantPermissions')->middleware('can:admin.saas.manage');
             Route::put('/tenants/{tenant}/users/{user}/role', 'assignTenantUserRole')->middleware('can:admin.saas.manage');
+            // Permission editor (tenant workspace → Roles & permissions).
+            Route::post('/tenants/{tenant}/roles', [\Modules\Saas\Http\Controllers\Api\V1\SaasTenantRoleController::class, 'storeCustomRole'])->middleware('can:admin.saas.manage');
+            Route::put('/tenants/{tenant}/roles/{role}', [\Modules\Saas\Http\Controllers\Api\V1\SaasTenantRoleController::class, 'updateCustomRole'])->whereNumber('role')->middleware('can:admin.saas.manage');
+            Route::delete('/tenants/{tenant}/roles/{role}', [\Modules\Saas\Http\Controllers\Api\V1\SaasTenantRoleController::class, 'destroyCustomRole'])->whereNumber('role')->middleware('can:admin.saas.manage');
+            Route::put('/roles/{role}/permissions', [\Modules\Saas\Http\Controllers\Api\V1\SaasTenantRoleController::class, 'updateBuiltInRole'])->middleware('can:admin.saas.manage');
+            Route::post('/roles/{role}/reset', [\Modules\Saas\Http\Controllers\Api\V1\SaasTenantRoleController::class, 'resetBuiltInRole'])->middleware('can:admin.saas.manage');
             Route::post('/tenants/message', 'sendTenantMessages')->middleware('can:admin.saas.manage');
             Route::post('/tenants/bulk/assign-plan', 'bulkAssignPlan')->middleware('can:admin.saas.manage');
             Route::post('/tenants/bulk/extend-trial', 'bulkExtendTrial')->middleware('can:admin.saas.manage');

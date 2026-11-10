@@ -16,7 +16,12 @@ class FlightMetaController extends Controller
      */
     public function index(): JsonResponse
     {
+        // The tenant this request is for: from its domain, or the signed-in user.
+        $tenantName = app(\Modules\Saas\Support\TenantContext::class)->get()?->name
+            ?? request()->user()?->tenant?->name;
+
         return ApiResponse::success([
+            'tenant_name' => $tenantName,
             'module' => 'flight',
             'version' => '1.0.0',
             'status' => 'active',

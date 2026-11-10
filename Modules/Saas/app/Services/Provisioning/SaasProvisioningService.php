@@ -259,12 +259,15 @@ class SaasProvisioningService
             ->every(function (DefaultRole $defaultRole) use ($permissionNames): bool {
                 $role = Role::query()->where('name', $defaultRole->value)
                     ->with('permissions:id,name')->first();
-                $expected = collect(DefaultRole::expandPermissions(
-                    $defaultRole->getPermissions(),
-                    $permissionNames,
-                ));
+                if ($role?->permissions_customized) {
+                    // Hand-edited by a platform admin; the sync would skip it anyway.
+                    return true;
+                }
+                $expected = collect($defaultRole->effectivePermissions($permissionNames));
+                $actual = $role?->permissions->pluck('name') ?? collect();
 
-                return $role && $expected->diff($role->permissions->pluck('name'))->isEmpty();
+                // Both ways: a role still holding removed (restaurant) permissions is stale too.
+                return $role && $expected->diff($actual)->isEmpty() && $actual->diff($expected)->isEmpty();
             });
 
         if ($rolesAreCurrent) {
@@ -428,6 +431,75 @@ class SaasProvisioningService
                 'restaurant_name' => $tenant->name,
             ],
         ]);
+
+        // Branding chosen on the onboarding form, saved where the site reads it
+        // (the theme uses appearance_*_color; theme_*_color above is legacy).
+        // The tenant admin can change all of these later in Settings.
+        $branding = array_filter([
+            'appearance_primary_color' => $this->hexColor($data['primary_color'] ?? null),
+            'appearance_secondary_color' => $this->hexColor($data['secondary_color'] ?? null),
+            'logo' => $this->storeOnboardingLogo($data['logo_data'] ?? null),
+        ], fn ($value) => $value !== null);
+        if ($branding) {
+            Setting::setMany($branding);
+        }
+    }
+
+    private function hexColor(mixed $value): ?string
+    {
+        $value = is_string($value) ? trim($value) : '';
+
+        return preg_match('/^#[0-9a-fA-F]{6}$/', $value) ? strtoupper($value) : null;
+    }
+
+    /**
+     * Save the logo file chosen on the onboarding form as this tenant's media
+     * and return its id for the `logo` setting (the same setting Settings →
+     * Logo writes, so the tenant admin can replace it there). Runs inside the
+     * new tenant's context, so the file lands in tenants/{id}/media. A logo that
+     * fails the media checks is skipped; it never blocks creating the tenant.
+     */
+    private function storeOnboardingLogo(?string $dataUrl): ?int
+    {
+        if (! $dataUrl || ! preg_match('/^data:image\/(png|jpe?g|webp);base64,(.+)$/s', $dataUrl, $m)) {
+            return null;
+        }
+        $bytes = base64_decode(preg_replace('/\s+/', '', $m[2]) ?? '', true);
+        if ($bytes === false || $bytes === '') {
+            return null;
+        }
+        // MediaService also accepts documents, so confirm these bytes really are
+        // a PNG/JPEG/WebP image (whatever the data URL claims) before storing.
+        $image = @getimagesizefromstring($bytes);
+        if (! $image || ! in_array($image['mime'] ?? '', ['image/png', 'image/jpeg', 'image/webp'], true)) {
+            Log::warning('Onboarding logo was not saved: the file is not a PNG, JPEG or WebP image.');
+
+            return null;
+        }
+        $m[1] = match ($image['mime']) {
+            'image/png' => 'png',
+            'image/webp' => 'webp',
+            default => 'jpeg',
+        };
+
+        $extension = $m[1] === 'jpg' ? 'jpeg' : $m[1];
+        $tmp = tempnam(sys_get_temp_dir(), 'logo_');
+        $path = $tmp . '.' . ($extension === 'jpeg' ? 'jpg' : $extension);
+        @rename($tmp, $path);
+        file_put_contents($path, $bytes);
+
+        try {
+            $file = new \Illuminate\Http\UploadedFile($path, 'agency-logo.' . ($extension === 'jpeg' ? 'jpg' : $extension), 'image/' . $extension, null, true);
+            $media = app(\Modules\Media\Services\Media\MediaServiceInterface::class)->store($file);
+
+            return $media?->id ? (int) $media->id : null;
+        } catch (\Throwable $e) {
+            Log::warning('Onboarding logo was not saved: ' . $e->getMessage());
+
+            return null;
+        } finally {
+            @unlink($path);
+        }
     }
 
     public function restaurantSkeleton(Branch $branch): void

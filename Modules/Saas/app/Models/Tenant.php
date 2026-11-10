@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Modules\ActivityLog\Traits\HasActivityLog;
 use Modules\Branch\Models\Branch;
+use Modules\Saas\Services\Workspace\FlightTenantLaunchService;
 use Modules\Support\Eloquent\Model;
 use Modules\Support\Traits\HasActiveStatus;
 use Modules\Support\Traits\HasCreatedBy;
@@ -186,69 +187,17 @@ class Tenant extends Model
             return;
         }
 
-        $coreSetupComplete = function (Builder $tenant): void {
-            $tenant->whereNotNull('domain')
-                ->where('domain', '<>', '')
-                ->whereHas('branches')
-                ->whereHas('users.roles', fn (Builder $role) => $role
-                    ->whereIn('name', ['enterprise_admin', 'admin_branch']))
-                ->whereHas('subscriptions', fn (Builder $subscription) => $subscription
-                    ->whereIn('status', ['trial', 'active']));
-        };
-
-        $operationalSetupComplete = function (Builder $tenant): void {
-            $tenant->has('users', '>=', 2);
-
-            foreach (['pos_terminal_devices', 'print_agents', 'orders'] as $table) {
-                if (! Schema::hasTable($table) || ! Schema::hasColumn($table, 'branch_id')) continue;
-
-                $tenant->whereExists(fn ($record) => $record
-                    ->selectRaw('1')
-                    ->from($table)
-                    ->join('branches', 'branches.id', '=', "{$table}.branch_id")
-                    ->whereColumn('branches.tenant_id', 'tenants.id')
-                    ->when(Schema::hasColumn($table, 'deleted_at'), fn ($query) => $query->whereNull("{$table}.deleted_at")));
-            }
-        };
-
+        // Flight agencies: setup is done once provisioning completed, or when the
+        // agency was set up by hand and is already live (FlightTenantLaunchService).
+        // The old rule also waited for POS terminals, print agents and
+        // restaurant orders, which a flight agency never has.
         if ($status === 'pending') {
-            $query->where(function (Builder $inSetup) {
-                $inSetup->whereDoesntHave('provisioningRuns')
-                    ->orWhereHas('latestProvisioningRun', fn (Builder $run) => $run
-                        ->where(function (Builder $incomplete) {
-                            $incomplete->whereNull('progress')->orWhere('progress', '<', 100);
-                        })
-                        ->whereNotIn('status', ['cancelled']))
-                    ->orWhereNull('domain')
-                    ->orWhere('domain', '')
-                    ->orWhereDoesntHave('branches')
-                    ->orWhereDoesntHave('users.roles', fn (Builder $role) => $role
-                        ->whereIn('name', ['enterprise_admin', 'admin_branch']))
-                    ->orWhereDoesntHave('subscriptions', fn (Builder $subscription) => $subscription
-                        ->whereIn('status', ['trial', 'active']))
-                    ->orWhereHas('users', fn (Builder $users) => $users, '<', 2);
-
-                foreach (['pos_terminal_devices', 'print_agents', 'orders'] as $table) {
-                    if (! Schema::hasTable($table) || ! Schema::hasColumn($table, 'branch_id')) continue;
-
-                    $inSetup->orWhereNotExists(fn ($record) => $record
-                        ->selectRaw('1')
-                        ->from($table)
-                        ->join('branches', 'branches.id', '=', "{$table}.branch_id")
-                        ->whereColumn('branches.tenant_id', 'tenants.id')
-                        ->when(Schema::hasColumn($table, 'deleted_at'), fn ($subquery) => $subquery->whereNull("{$table}.deleted_at")));
-                }
-            });
+            $query->whereNot(fn (Builder $tenant) => FlightTenantLaunchService::constrainProvisioned($tenant));
             return;
         }
 
         if ($status === 'completed') {
-            $query->where(function (Builder $tenant) use ($coreSetupComplete, $operationalSetupComplete) {
-                $coreSetupComplete($tenant);
-                $operationalSetupComplete($tenant);
-            })->whereHas('latestProvisioningRun', fn (Builder $run) => $run
-                    ->where('status', 'completed')
-                    ->where('progress', '>=', 100));
+            FlightTenantLaunchService::constrainProvisioned($query);
             return;
         }
 
@@ -336,7 +285,11 @@ class Tenant extends Model
             }
 
             if (Schema::hasTable('saas_provisioning_runs')) {
-                $attention->orWhereDoesntHave('provisioningRuns')
+                // No provisioning run is only a problem when the agency is not
+                // already live (set up by hand, with real bookings).
+                $attention->orWhere(fn (Builder $unprovisioned) => $unprovisioned
+                        ->whereDoesntHave('provisioningRuns')
+                        ->whereNot(fn (Builder $live) => FlightTenantLaunchService::constrainLiveWithoutProvisioning($live)))
                     ->orWhereHas('latestProvisioningRun', fn (Builder $run) => $run->whereIn('status', ['failed', 'partially_completed']));
             }
         });

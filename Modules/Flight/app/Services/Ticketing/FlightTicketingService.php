@@ -74,7 +74,8 @@ class FlightTicketingService
             }
 
             // 2. IDEMPOTENCY GUARD: Already ticketed? Return existing
-            if ($booking->tickets()->exists() && ! empty($booking->pnr)) {
+            // Exchanged tickets belong to the flight before a reschedule.
+            if ($booking->tickets()->where('status', '!=', TicketStatus::EXCHANGED)->exists() && ! empty($booking->pnr)) {
                 return $booking->load('tickets');
             }
 
@@ -196,10 +197,13 @@ class FlightTicketingService
                 $tktNumber = $ticketNumbers[$ticketIdx] ?? ('098-' . mt_rand(1000000000, 9999999999));
                 $ticketIdx++;
 
-                $ticket = FlightTicket::create([
-                    'tenant_id'                   => $booking->tenant_id,
+                // One ticket per passenger per booking: a reschedule reissues the
+                // passenger's exchanged ticket. The amendment keeps the old PNR.
+                $ticket = FlightTicket::updateOrCreate([
                     'flight_booking_id'           => $booking->id,
                     'flight_booking_passenger_id' => $pax->id,
+                ], [
+                    'tenant_id'                   => $booking->tenant_id,
                     'ticket_number'               => $tktNumber,
                     'e_ticket_number'             => 'ETKT-' . strtoupper(Str::random(10)),
                     'pnr'                         => $pnr,

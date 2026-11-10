@@ -170,6 +170,22 @@ class Setting extends Model
         }
     }
 
+    /**
+     * The stored payload of the most specific row for this key in the current
+     * scope (branch > tenant > global), without picking one locale out of a
+     * translatable value — e.g. every language of app_name for the edit form.
+     */
+    public static function rawScopedPayload(string $key): mixed
+    {
+        try {
+            $setting = static::scopedQuery()->where('key', $key)->get()->last();
+        } catch (QueryException) {
+            return null;
+        }
+
+        return $setting ? unserialize($setting->getRawOriginal('payload')) : null;
+    }
+
     private static function scopedQuery()
     {
         $query = static::query();
