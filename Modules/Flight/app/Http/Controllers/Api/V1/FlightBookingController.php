@@ -397,7 +397,9 @@ class FlightBookingController extends Controller
             'total'        => $paginator->total(),
             // Summary cards count every booking matching the table's filters;
             // counting the current page client-side only saw the first rows.
-            'summary'      => $this->bookingService->bookingSummary($filters, $tenant),
+            // Cards show every stage at once, so only the search narrows them
+            // (a status filter would zero every other card).
+            'summary'      => $this->bookingService->bookingSummary(array_intersect_key($filters, ['search' => true]), $tenant),
         ]);
     }
 
@@ -430,6 +432,10 @@ class FlightBookingController extends Controller
                 $validated['pnr'],
                 $this->resolveTenant($request),
             );
+            // Same as assigning a PNR from the route: issue the ticket now. A
+            // failure keeps the PNR and is saved on the booking for a retry.
+            $ticketed = app(\Modules\Flight\Services\Booking\FlightPnrAllocationService::class)->issueTicket($booking);
+            $booking = $booking->fresh();
 
             return ApiResponse::success([
                 'booking_reference' => $booking->booking_reference,
@@ -438,7 +444,9 @@ class FlightBookingController extends Controller
                 'status_label' => $booking->booking_status->label(),
                 'payment_status' => $booking->payment_status->value,
                 'ticket_status' => $booking->ticket_status?->value,
-                'message' => 'PNR saved and booking marked as booked.',
+                'message' => $ticketed
+                    ? 'PNR saved and the e-ticket was issued.'
+                    : 'PNR saved, but the e-ticket could not be issued yet. Retry it from the booking.',
             ]);
         } catch (DomainException $e) {
             return ApiResponse::errors(null, $e->getMessage(), 422);

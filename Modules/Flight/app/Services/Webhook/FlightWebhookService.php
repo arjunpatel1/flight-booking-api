@@ -218,6 +218,10 @@ class FlightWebhookService
                     'confirmed_at'      => now(),
                 ]);
                 app(\Modules\Flight\Services\Booking\FlightOfferService::class)->redeemForBooking($booking);
+                // Keep the paid seats: stop the hold expiring and returning them.
+                \Illuminate\Support\Facades\DB::transaction(
+                    fn () => app(\Modules\Flight\Services\Hold\FlightHoldService::class)->convertForPaidBooking($booking)
+                );
 
                 event(new \Modules\Flight\Events\FlightPaymentConfirmed($payment, $booking));
             }

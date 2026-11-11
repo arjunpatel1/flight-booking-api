@@ -35,6 +35,40 @@ class FlightPnrAllocationService
         protected FlightServicingService $servicingService,
     ) {}
 
+    /** The flight's inventory rows (one per cabin) behind a dated route. */
+    private function routeInventoryIds(FlightRoute $route): Collection
+    {
+        return FlightInventory::query()
+            ->where('tenant_id', $route->tenant_id)
+            ->where('flight_number', $route->flight_number)
+            ->where('origin_airport_id', $route->origin_airport_id)
+            ->where('destination_airport_id', $route->destination_airport_id)
+            ->when($route->flight_time, fn (Builder $query) => $query->whereTime('departure_time', $route->flight_time))
+            ->pluck('id');
+    }
+
+    /** The PNR most recently given to a booking on this flight that day, if any. */
+    public function lastAllocatedPnr(FlightRoute $route): ?string
+    {
+        $departureDate = $route->flight_date?->toDateString();
+        $inventoryIds = $departureDate ? $this->routeInventoryIds($route) : collect();
+        if ($inventoryIds->isEmpty()) {
+            return null;
+        }
+
+        return FlightBooking::query()
+            ->where('tenant_id', $route->tenant_id)
+            ->whereIn('flight_inventory_id', $inventoryIds)
+            ->where('manual_pnr_required', true)
+            ->whereNotNull('pnr')
+            ->where('pnr', '!=', '')
+            ->latest('updated_at')
+            ->limit(50)
+            ->get(['pnr', 'itinerary'])
+            ->first(fn (FlightBooking $booking): bool => FlightBooking::departureDateOf((array) ($booking->itinerary ?? [])) === $departureDate)
+            ?->pnr;
+    }
+
     /** Paid bookings on this route's flight and date still waiting for a PNR, first paid first. */
     public function pendingBookingsForRoute(FlightRoute $route): Collection
     {
@@ -43,14 +77,7 @@ class FlightPnrAllocationService
             return collect();
         }
 
-        $inventoryIds = FlightInventory::query()
-            ->where('tenant_id', $route->tenant_id)
-            ->where('flight_number', $route->flight_number)
-            ->where('origin_airport_id', $route->origin_airport_id)
-            ->where('destination_airport_id', $route->destination_airport_id)
-            ->when($route->flight_time, fn (Builder $query) => $query->whereTime('departure_time', $route->flight_time))
-            ->pluck('id');
-
+        $inventoryIds = $this->routeInventoryIds($route);
         if ($inventoryIds->isEmpty()) {
             return collect();
         }

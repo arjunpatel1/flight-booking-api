@@ -55,6 +55,8 @@ class FlightFareController extends Controller
             'origin_code' => ['nullable', 'string', 'size:3'],
             'destination_code' => ['nullable', 'string', 'size:3'],
             'departure_time' => ['nullable', 'date_format:H:i'],
+            // The travel date: seats are counted per flight per date.
+            'departure_date' => ['nullable', 'date_format:Y-m-d'],
             'fare_family_code' => ['required', 'string', 'max:50'],
             'cabin_class' => ['required', 'string', 'max:30'],
         ]);
@@ -103,11 +105,15 @@ class FlightFareController extends Controller
             );
         }
 
+        // With a date, the flight's seats that day (all cabins together).
+        $seatPool = app(\Modules\Flight\Services\Inventory\FlightSeatPool::class);
+        $route = $seatPool->routeFor($fare->inventory, $data['departure_date'] ?? null);
+
         return ApiResponse::success([
             'flight_inventory_id' => $fare->flight_inventory_id,
             'flight_fare_id' => $fare->id,
-            'available_seats' => (int) $fare->inventory->available_seats,
-            'total_seats' => (int) $fare->inventory->total_seats,
+            'available_seats' => $route ? $seatPool->routeAvailable($route) : (int) $fare->inventory->available_seats,
+            'total_seats' => $route ? (int) $route->total_seats : (int) $fare->inventory->total_seats,
         ]);
     }
 

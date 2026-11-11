@@ -24,6 +24,7 @@ class FlightSearchEngine
         protected FlightPricingEngine $pricingEngine,
         protected FlightFareAggregationEngine $aggregationEngine,
         protected SupplierManager $supplierManager,
+        protected \Modules\Flight\Services\Inventory\FlightSeatPool $seatPool,
     ) {}
 
     /**
@@ -190,9 +191,9 @@ class FlightSearchEngine
         $query->whereHas('originAirport', fn ($q) => $q->where('iata_code', $params->origin))
               ->whereHas('destinationAirport', fn ($q) => $q->where('iata_code', $params->destination));
 
-        // Minimum capacity ($fullOnly: the flights that fly that day but lack the seats)
+        // Minimum capacity is checked per flight below, against the seats left on
+        // the searched date ($fullOnly: flights that fly that day but lack them).
         $totalPax = $params->totalPassengers();
-        $query->where('available_seats', $fullOnly ? '<' : '>=', $totalPax);
 
         $inventories = $query->get();
         $itineraries = [];
@@ -215,7 +216,7 @@ class FlightSearchEngine
             ->whereIn('tenant_id', $inventories->pluck('tenant_id')->filter()->unique())
             ->whereIn('flight_number', $inventories->pluck('flight_number')->unique())
             ->whereNotNull('flight_date')
-            ->get(['tenant_id', 'flight_number', 'origin_airport_id', 'destination_airport_id', 'flight_date', 'flight_time', 'gst_percentage'])
+            ->get(['id', 'tenant_id', 'flight_number', 'origin_airport_id', 'destination_airport_id', 'flight_date', 'flight_time', 'gst_percentage', 'total_seats', 'available_seats'])
             ->groupBy(fn (FlightRoute $route) => $this->routeKey(
                 $route->tenant_id,
                 $route->flight_number,
@@ -272,12 +273,7 @@ class FlightSearchEngine
                 }
             }
 
-            if ($fullOnly) {
-                $itineraries[] = $inventory->id;
-                continue;
-            }
-
-            // The GST % entered on this flight's route for the searched date (0 if none).
+            // This flight's route for the searched date (null for recurring inventory).
             $route = $datedRoutes->get($this->routeKey(
                 $inventory->tenant_id,
                 $inventory->flight_number,
@@ -285,6 +281,25 @@ class FlightSearchEngine
                 $inventory->destination_airport_id,
                 $inventory->departure_time,
             ))?->first(fn (FlightRoute $route) => $route->flight_date->toDateString() === $carbonDate->toDateString());
+
+            // Seats left that day: the dated route's pool, shared by every cabin
+            // and fare family. Set on the in-memory model (never saved) so the
+            // fare options below report the same number.
+            if ($route && (int) $route->total_seats > 0) {
+                $inventory->setAttribute('available_seats', $this->seatPool->routeAvailable($route));
+            }
+            $hasSeats = (int) $inventory->available_seats >= $totalPax;
+            if ($fullOnly) {
+                if (! $hasSeats) {
+                    $itineraries[] = $inventory->id;
+                }
+                continue;
+            }
+            if (! $hasSeats) {
+                continue;
+            }
+
+            // The GST % entered on this flight's route for the searched date (0 if none).
             $routeGstPercent = max(0.0, (float) ($route?->gst_percentage ?? 0));
 
             // Standardize Itinerary

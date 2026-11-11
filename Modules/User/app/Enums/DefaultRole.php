@@ -60,7 +60,6 @@ enum DefaultRole: string
         return [
             ...self::getBranchAvailableRoles(),
             DefaultRole::FlightAdmin->value,
-            DefaultRole::FlightDistributor->value,
             DefaultRole::FlightAgent->value,
         ];
     }

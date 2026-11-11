@@ -111,6 +111,10 @@ class FlightOfferService
                 'discount' => $discount,
                 'eligible' => $reason === null && $discount > 0,
                 'reason' => $reason ?? ($discount > 0 ? null : 'Discount does not apply to this fare'),
+                // Lets the checkout say "Add ₹2,999 more to unlock" instead of a bare reason.
+                'minimum_spend' => $offer->minimum_spend !== null ? (float) $offer->minimum_spend : null,
+                'maximum_spend' => $offer->maximum_spend !== null ? (float) $offer->maximum_spend : null,
+                'shortfall' => $offer->minimum_spend !== null ? round(max(0, (float) $offer->minimum_spend - $subtotal), 2) : 0,
             ];
         }
         return $options;

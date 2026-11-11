@@ -16,6 +16,7 @@ use Modules\Flight\Models\FlightHold;
 use Modules\Flight\Models\FlightInventory;
 use Modules\Flight\Models\FlightInventoryBalance;
 use Modules\Flight\Services\Inventory\FlightInventoryAllocationEngine;
+use Modules\Flight\Services\Inventory\FlightSeatPool;
 use Modules\Flight\Services\Pricing\FlightPricingEngine;
 use Modules\Saas\Models\Tenant;
 use Modules\User\Models\User;
@@ -26,6 +27,7 @@ class FlightHoldService
     public function __construct(
         protected FlightPricingEngine $pricingEngine,
         protected FlightInventoryAllocationEngine $allocationEngine,
+        protected FlightSeatPool $seatPool,
     ) {}
 
     /**
@@ -201,13 +203,14 @@ class FlightHoldService
             ];
         }
 
-        // Global flight seats check
-        if ($inventory->available_seats < $quantity) {
+        // Global flight seats check: the flight's seats on that date, all cabins together.
+        $seatsLeft = $this->seatPool->available($inventory, $input['departure_date'] ?? null);
+        if ($seatsLeft < $quantity) {
             return [
                 'available'       => false,
-                'seats_available' => $inventory->available_seats,
+                'seats_available' => $seatsLeft,
                 'error_code'      => 'INSUFFICIENT_FLIGHT_CAPACITY',
-                'message'         => "Only {$inventory->available_seats} total seats available on this flight.",
+                'message'         => "Only {$seatsLeft} total seats available on this flight.",
             ];
         }
 
@@ -238,7 +241,7 @@ class FlightHoldService
 
         return [
             'available'       => true,
-            'seats_available' => $inventory->available_seats,
+            'seats_available' => $seatsLeft,
             'cabin_class'     => $cabin,
             'inventory_id'    => $inventory->id,
         ];
@@ -320,9 +323,10 @@ class FlightHoldService
                 }
 
                 $inventory = FlightInventory::lockForUpdate()->find($inventoryId);
-                if (! $inventory || $inventory->available_seats < $quantity) {
+                if (! $inventory) {
                     throw new RuntimeException('Insufficient available seats on flight.');
                 }
+                $departureDate = $input['departure_date'] ?? null;
 
                 $fare = null;
                 if ($fareId) {
@@ -349,10 +353,11 @@ class FlightHoldService
                         ttlSeconds:   $holdTtl,
                         reservedBy:   $user?->id,
                     );
-                } else {
-                    // Direct flight inventory reservation
-                    $inventory->decrement('available_seats', $quantity);
                 }
+
+                // The flight's seats on that date (all cabins share them). Throws,
+                // rolling the transaction back, when not enough are left.
+                $this->seatPool->take($inventory, $departureDate, $quantity);
 
                 // 3. Create FlightHold entity
                 $expiresAt = Carbon::now()->addSeconds($holdTtl);
@@ -427,8 +432,9 @@ class FlightHoldService
                 } catch (\Throwable $e) {
                     Log::warning('FlightHoldService: reservation release warning', ['error' => $e->getMessage()]);
                 }
-            } elseif ($hold->flight_inventory_id && $hold->flightInventory) {
-                $hold->flightInventory->increment('available_seats', $hold->quantity);
+            }
+            if ($hold->flight_inventory_id && $hold->flightInventory) {
+                $this->seatPool->give($hold->flightInventory, $this->seatPool->holdDate($hold), (int) $hold->quantity);
             }
 
             $hold->update([
@@ -460,11 +466,12 @@ class FlightHoldService
 
         if ($hold->status !== HoldStatus::ACTIVE) {
             $inventory = FlightInventory::lockForUpdate()->find($hold->flight_inventory_id);
-            $seats = $inventory ? min((int) $hold->quantity, max(0, (int) $inventory->available_seats)) : 0;
-            if ($seats > 0 && ! $hold->reservation_id) {
-                $inventory->decrement('available_seats', $seats);
+            $date = $this->seatPool->holdDate($hold, $booking);
+            $seats = $inventory ? min((int) $hold->quantity, $this->seatPool->available($inventory, $date)) : 0;
+            if ($seats > 0) {
+                $this->seatPool->take($inventory, $date, $seats);
             }
-            if ($seats < (int) $hold->quantity || $hold->reservation_id) {
+            if ($seats < (int) $hold->quantity) {
                 Log::warning('FlightHoldService: paid booking could not retake all its seats', [
                     'booking' => $booking->booking_reference,
                     'hold_id' => $hold->hold_id,
@@ -488,6 +495,18 @@ class FlightHoldService
 
         foreach ($expiredHolds as $hold) {
             try {
+                // A hold whose booking is already paid is sold, not abandoned:
+                // keep its seats instead of putting them back on sale.
+                $paidBooking = \Modules\Flight\Models\FlightBooking::query()
+                    ->withoutGlobalScopes()
+                    ->where('hold_id', $hold->id)
+                    ->where('payment_status', \Modules\Flight\Enums\PaymentStatus::PAID->value)
+                    ->first();
+                if ($paidBooking) {
+                    DB::transaction(fn () => $this->convertForPaidBooking($paidBooking));
+                    continue;
+                }
+
                 $this->releaseHold($hold->id, 'Automatic TTL Expiry');
                 $hold->update(['status' => HoldStatus::EXPIRED]);
                 event(new \Modules\Flight\Events\FlightHoldExpired($hold));

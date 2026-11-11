@@ -41,7 +41,14 @@ class FlightServicingService
         protected FlightWalletLedgerService $walletLedgerService,
         protected FlightRefundPolicyService $refundPolicy,
         protected FlightPaymentGatewayAdapter $gatewayAdapter,
+        protected \Modules\Flight\Services\Inventory\FlightSeatPool $seatPool,
     ) {}
+
+    /** The travel date a booking currently holds its seats on. */
+    private function seatDate(FlightBooking $booking): ?string
+    {
+        return $this->seatPool->bookingDate($booking) ?? $this->bookingDeparture($booking)?->toDateString();
+    }
 
     // =========================================================================
     // 1. CANCELLATION & REFUND QUOTE
@@ -178,9 +185,10 @@ class FlightServicingService
             // 4. Release Inventory
             $paxCount = max(1, $booking->passengers()->count() ?: ($booking->pax_count_adult + $booking->pax_count_child));
             if ($booking->flight_inventory_id) {
-                $inv = FlightInventory::where('id', $booking->flight_inventory_id)->lockForUpdate()->first();
+                $inv = FlightInventory::where('id', $booking->flight_inventory_id)->first();
                 if ($inv) {
-                    $inv->increment('available_seats', $paxCount);
+                    // Back on sale for that date (all cabins share the flight's seats).
+                    $this->seatPool->give($inv, $this->seatDate($booking), $paxCount);
                 }
             }
 
@@ -596,8 +604,7 @@ class FlightServicingService
                 'originAirport' => fn ($relation) => $relation->withoutGlobalScopes(),
                 'destinationAirport' => fn ($relation) => $relation->withoutGlobalScopes(),
             ])
-            ->where('status', 'active')
-            ->where('available_seats', '>=', $paxCount);
+            ->where('status', 'active');
 
         // Same route only, by airport code. Without a known route, offer nothing:
         // never every route.
@@ -619,6 +626,10 @@ class FlightServicingService
             foreach ($this->scheduledDates($inv) as $date) {
                 $departure = $this->flightDeparture($inv, $date);
                 if (! $departure || $departure->isPast() || $this->isBookedFlight($booking, $inv, $date)) {
+                    continue;
+                }
+                // Enough seats left on that flight that day (all cabins share them).
+                if ($this->seatPool->available($inv, $date) < $paxCount) {
                     continue;
                 }
                 $candidates[] = [$inv, $date, $departure];
@@ -653,7 +664,7 @@ class FlightServicingService
                 'departure_time'          => $depTime,
                 'arrival_time'            => $arrTime,
                 'cabin_class'             => $inv->cabin_class ?? 'ECONOMY',
-                'available_seats'         => $inv->available_seats,
+                'available_seats'         => $this->seatPool->available($inv, $date),
                 'new_price'               => $newPrice,
                 'previous_price'          => $currentAmount,
                 'fare_difference'         => $fareDiff,
@@ -999,8 +1010,14 @@ class FlightServicingService
                 return;
             }
 
-            FlightInventory::whereKey($amendment->new_flight_inventory_id)->lockForUpdate()->first()
-                ?->increment('available_seats', (int) ($amendment->audit_trail['pax_count'] ?? 1));
+            $heldOn = FlightInventory::whereKey($amendment->new_flight_inventory_id)->first();
+            if ($heldOn) {
+                $this->seatPool->give(
+                    $heldOn,
+                    substr((string) ($amendment->audit_trail['new_departure_time'] ?? ''), 0, 10) ?: null,
+                    (int) ($amendment->audit_trail['pax_count'] ?? 1),
+                );
+            }
 
             $payment = FlightPayment::whereKey($amendment->audit_trail['flight_payment_id'] ?? 0)->lockForUpdate()->first();
             if ($payment && $payment->status->canTransitionTo(FlightPaymentStatus::CANCELLED)) {
@@ -1017,7 +1034,7 @@ class FlightServicingService
     private function holdSeatForPaymentLink(FlightBooking $booking, FlightInventory $newInventory, array $priced, float $rescheduleFee, string $reason, string $actor): FlightBookingAmendment
     {
         $seats = $this->seatCount($booking);
-        $newInventory->decrement('available_seats', $seats);
+        $this->seatPool->take($newInventory, $priced['departure_at']->toDateString(), $seats);
 
         $payment = FlightPayment::create([
             'tenant_id'                 => $booking->tenant_id,
@@ -1162,11 +1179,16 @@ class FlightServicingService
         $previousItinerary = $booking->itinerary;
         $previousPnr = $booking->pnr;
 
-        if ($previousInventoryId && $previousInventoryId !== $newInventory->id) {
-            FlightInventory::where('id', $previousInventoryId)->lockForUpdate()->first()?->increment('available_seats', $seats);
+        // Seats are per flight per date: moving to another flight, cabin or date
+        // gives the old date's seats back and takes the new date's.
+        $previousDate = $this->seatDate($booking);
+        $newDate = $priced['departure_at']->toDateString();
+        $previousInventory = $previousInventoryId ? FlightInventory::find($previousInventoryId) : null;
+        if ($previousInventory && ($previousInventoryId !== $newInventory->id || $previousDate !== $newDate)) {
+            $this->seatPool->give($previousInventory, $previousDate, $seats);
         }
         if (! $seatAlreadyHeld) {
-            $newInventory->decrement('available_seats', $seats);
+            $this->seatPool->take($newInventory, $newDate, $seats);
         }
 
         $supplierRef = $booking->supplier_booking_reference ?: $booking->booking_reference;
@@ -1293,7 +1315,7 @@ class FlightServicingService
             $departure->isPast() => 'This flight has already departed.',
             ! $originCode || ! $destinationCode => "This booking's route is unknown, so it cannot be rescheduled.",
             strtoupper((string) $newOrigin) !== $originCode || strtoupper((string) $newDestination) !== $destinationCode => 'A booking can only move to a flight on the same route.',
-            $newInventory->available_seats < $this->seatCount($booking) => "Insufficient seats available on replacement flight: required {$this->seatCount($booking)}, available {$newInventory->available_seats}.",
+            $this->seatPool->available($newInventory, $date) < $this->seatCount($booking) => "Insufficient seats available on replacement flight: required {$this->seatCount($booking)}, available {$this->seatPool->available($newInventory, $date)}.",
             default => null,
         };
 

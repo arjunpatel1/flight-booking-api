@@ -73,28 +73,37 @@ class FlightB2BNetworkService
     }
 
     /**
-     * Create an Agent under a Distributor.
+     * Create a B2B agent. With no distributor the agent is a partner business
+     * directly under the agency (tenant), which is the normal B2B setup; the
+     * distributor tier is optional.
      */
-    public function createAgent(FlightDistributor $distributor, array $data): FlightAgent
+    public function createAgent(?FlightDistributor $distributor, array $data, ?int $tenantId = null): FlightAgent
     {
-        if (! $distributor->isActive()) {
-            throw new RuntimeException("Cannot create agent under a non-active distributor [{$distributor->name}].");
+        if ($distributor) {
+            if (! $distributor->isActive()) {
+                throw new RuntimeException("Cannot create agent under a non-active distributor [{$distributor->name}].");
+            }
+
+            if (! $distributor->allow_sub_agents) {
+                throw new RuntimeException("Distributor [{$distributor->name}] is not permitted to register sub-agents.");
+            }
+
+            if ($distributor->agents()->count() >= $distributor->max_agents) {
+                throw new RuntimeException("Distributor [{$distributor->name}] has reached its agent capacity limit ({$distributor->max_agents}).");
+            }
         }
 
-        if (! $distributor->allow_sub_agents) {
-            throw new RuntimeException("Distributor [{$distributor->name}] is not permitted to register sub-agents.");
+        $tenantId = $distributor?->tenant_id ?? $tenantId ?? auth()->user()?->tenant_id;
+        if (! $tenantId) {
+            throw new RuntimeException('Tenant ID is required to create a B2B agent.');
         }
 
-        if ($distributor->agents()->count() >= $distributor->max_agents) {
-            throw new RuntimeException("Distributor [{$distributor->name}] has reached its agent capacity limit ({$distributor->max_agents}).");
-        }
-
-        return DB::transaction(function () use ($distributor, $data) {
+        return DB::transaction(function () use ($distributor, $data, $tenantId) {
             $code = strtoupper($data['code'] ?? 'AGT-' . Str::random(6));
 
             $agent = FlightAgent::create([
-                'tenant_id'             => $distributor->tenant_id,
-                'flight_distributor_id' => $distributor->id,
+                'tenant_id'             => $tenantId,
+                'flight_distributor_id' => $distributor?->id,
                 'user_id'               => $data['user_id'] ?? null,
                 'name'                  => $data['name'],
                 'code'                  => $code,
@@ -111,7 +120,7 @@ class FlightB2BNetworkService
 
             // Initialize agent wallet
             FlightB2BWallet::create([
-                'tenant_id'    => $distributor->tenant_id,
+                'tenant_id'    => $tenantId,
                 'owner_type'   => 'AGENT',
                 'owner_id'     => $agent->id,
                 'currency'     => $data['currency'] ?? 'INR',
@@ -233,22 +242,32 @@ class FlightB2BNetworkService
                     'agents_count'     => $dist->agents->count(),
                     'total_allocated'  => $dist->inventoryBalances->sum('total_allocated'),
                     'available_seats'  => $dist->inventoryBalances->sum('available'),
-                    'agents'           => $dist->agents->map(function (FlightAgent $agt) {
-                        return [
-                            'id'               => $agt->id,
-                            'name'             => $agt->name,
-                            'code'             => $agt->code,
-                            'tier'             => 'AGENT',
-                            'status'           => $agt->status->value,
-                            'is_operational'   => $agt->isOperational(),
-                            'credit_limit'     => $agt->credit_limit,
-                            'available_credit' => $agt->wallet?->available_credit ?? 0.0,
-                        ];
-                    }),
+                    'agents'           => $dist->agents->map(fn (FlightAgent $agt) => $this->agentNode($agt)),
                 ];
             }),
+            // B2B partners directly under the agency (the usual setup).
+            'agents'       => FlightAgent::where('tenant_id', $tenantId)
+                ->whereNull('flight_distributor_id')
+                ->with('wallet')
+                ->get()
+                ->map(fn (FlightAgent $agt) => $this->agentNode($agt)),
         ];
 
         return $tree;
+    }
+
+    private function agentNode(FlightAgent $agt): array
+    {
+        return [
+            'id'               => $agt->id,
+            'name'             => $agt->name,
+            'code'             => $agt->code,
+            'agency_name'      => $agt->agency_name,
+            'tier'             => 'AGENT',
+            'status'           => $agt->status->value,
+            'is_operational'   => $agt->isOperational(),
+            'credit_limit'     => $agt->credit_limit,
+            'available_credit' => $agt->wallet?->available_credit ?? 0.0,
+        ];
     }
 }

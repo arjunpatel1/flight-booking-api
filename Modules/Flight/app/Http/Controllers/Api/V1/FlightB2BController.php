@@ -53,10 +53,17 @@ class FlightB2BController extends Controller
         return null;
     }
 
+    /**
+     * Who is calling, decided only from the signed-in account:
+     *  - AGENT:       the login linked to a B2B agent (flight_agents.user_id)
+     *  - DISTRIBUTOR: the login linked to a distributor (legacy tier)
+     *  - TENANT:      the agency's own administrators
+     * Request headers or body fields never choose the role or the agent, so
+     * one agent cannot act as (and spend the wallet of) another.
+     */
     protected function resolveB2BActor(Request $request, ?Tenant $tenant): array
     {
         $user = $request->user();
-        $forcedRole = strtoupper($request->header('X-B2B-Role', ''));
 
         // 1. Check if linked to FlightAgent
         $agent = null;
@@ -64,13 +71,6 @@ class FlightB2BController extends Controller
             $agent = FlightAgent::where('user_id', $user->id)
                 ->when($tenant, fn ($q) => $q->where('tenant_id', $tenant->id))
                 ->first();
-        }
-
-        if (! $agent && ($forcedRole === 'AGENT' || ($user && $user->hasRole('flight_agent')))) {
-            $agentId = $request->input('agent_id') ?? $request->header('X-Agent-ID');
-            if ($agentId) {
-                $agent = FlightAgent::when($tenant, fn ($q) => $q->where('tenant_id', $tenant->id))->find((int) $agentId);
-            }
         }
 
         if ($agent) {
@@ -91,13 +91,6 @@ class FlightB2BController extends Controller
                 ->first();
         }
 
-        if (! $distributor && ($forcedRole === 'DISTRIBUTOR' || ($user && $user->hasRole('flight_distributor')))) {
-            $distId = $request->input('distributor_id') ?? $request->header('X-Distributor-ID');
-            if ($distId) {
-                $distributor = FlightDistributor::when($tenant, fn ($q) => $q->where('tenant_id', $tenant->id))->find((int) $distId);
-            }
-        }
-
         if ($distributor) {
             return [
                 'role'        => 'DISTRIBUTOR',
@@ -108,24 +101,16 @@ class FlightB2BController extends Controller
             ];
         }
 
-        // 3. Fallback to TENANT ADMIN (Verified against administrative roles)
-        if ($user) {
-            $isAuthorizedAdmin = $user->hasRole('flight_admin')
-                || $user->hasRole('admin')
-                || $user->hasRole(DefaultRole::SuperAdmin->value)
-                || (bool) ($user->is_super_admin ?? false)
-                || (bool) ($user->is_admin ?? false)
-                || ($forcedRole === 'TENANT');
-
-            if (! $isAuthorizedAdmin) {
-                return [
-                    'role'        => 'UNAUTHORIZED',
-                    'agent'       => null,
-                    'distributor' => null,
-                    'tenant'      => $tenant,
-                    'user'        => $user,
-                ];
-            }
+        // 3. The agency's own administrators. Anyone else (customers, a
+        // flight_agent login not yet linked to an agent record) is refused.
+        if (! $this->isTenantAdmin($user)) {
+            return [
+                'role'        => 'UNAUTHORIZED',
+                'agent'       => null,
+                'distributor' => null,
+                'tenant'      => $tenant,
+                'user'        => $user,
+            ];
         }
 
         return [
@@ -135,6 +120,37 @@ class FlightB2BController extends Controller
             'tenant'      => $tenant,
             'user'        => $user,
         ];
+    }
+
+    /** Agency administrators: platform super admin and the tenant's admin roles. */
+    protected function isTenantAdmin($user): bool
+    {
+        return \Modules\Flight\Http\Middleware\EnsureFlightAgencyAdmin::allows($user);
+    }
+
+    /** Managing B2B partners (create, suspend, credit) is for agency admins only. */
+    protected function denyUnlessTenantAdmin(Request $request): ?JsonResponse
+    {
+        return $this->isTenantAdmin($request->user())
+            ? null
+            : ApiResponse::errors(null, 'Only agency administrators can manage B2B partners.', 403);
+    }
+
+    /**
+     * Whether a B2B agent / distributor may act on (pay, cancel) a booking.
+     * Only bookings stamped with their own id qualify; website (B2C) and other
+     * partners' bookings carry no matching id and are refused.
+     */
+    protected function actorOwnsBooking(array $actor, FlightBooking $booking): bool
+    {
+        $meta = $booking->meta ?? [];
+
+        return match ($actor['role']) {
+            'AGENT'       => (int) ($meta['agent_id'] ?? 0) === (int) $actor['agent']->id,
+            'DISTRIBUTOR' => (int) ($meta['distributor_id'] ?? 0) === (int) $actor['distributor']->id,
+            'TENANT'      => true,
+            default       => false,
+        };
     }
 
     // ── PHASE 20: B2B BOOKING WORKSPACE ──────────────────────────────────────
@@ -272,6 +288,9 @@ class FlightB2BController extends Controller
             });
         } elseif ($role === 'DISTRIBUTOR') {
             $bookingsQuery->where('meta->distributor_id', $distributor->id);
+        } else {
+            // The agency's view: bookings made by its B2B agents, not website ones.
+            $bookingsQuery->whereNotNull('meta->agent_id');
         }
 
         $allBookings = (clone $bookingsQuery)->get();
@@ -325,13 +344,14 @@ class FlightB2BController extends Controller
                     $agentCommissionTotal += (float) ($b->meta['agent_commission'] ?? 0);
                 }
             }
-            $tenantRevenue = round($bookingsSummary['total_amount'] * 0.08, 2);
+            // Real figures only: what agents booked and what the agency paid
+            // them in commission. (A made-up "8% revenue" used to be shown.)
             $financialSummary = [
                 'total_booking_volume'     => $bookingsSummary['total_amount'],
-                'tenant_revenue'           => $tenantRevenue,
                 'distributor_commissions'  => round($distCommissionTotal, 2),
                 'agent_commissions'        => round($agentCommissionTotal, 2),
                 'total_commissions'        => round($distCommissionTotal + $agentCommissionTotal, 2),
+                'net_after_commissions'    => round($bookingsSummary['total_amount'] - $distCommissionTotal - $agentCommissionTotal, 2),
                 'currency'                 => $bookingsSummary['currency'],
             ];
         }
@@ -392,7 +412,9 @@ class FlightB2BController extends Controller
         } elseif ($role === 'DISTRIBUTOR') {
             $query->where('meta->distributor_id', $distributor->id);
         } else {
-            // Tenant Admin optional filters
+            // Agency admin: every B2B agent's bookings (website bookings live
+            // in the main Bookings screen).
+            $query->whereNotNull('meta->agent_id');
             if ($reqAgentId = $request->query('agent_id')) {
                 $query->where('meta->agent_id', (int) $reqAgentId);
             }
@@ -464,7 +486,6 @@ class FlightB2BController extends Controller
                 ];
             } else {
                 $item['commission_info'] = [
-                    'tenant_revenue'         => round((float) $b->total_amount * 0.08, 2),
                     'distributor_commission' => (float) ($meta['distributor_commission'] ?? 0),
                     'agent_commission'       => (float) ($meta['agent_commission'] ?? 0),
                     'agent_name'             => $meta['agent_name'] ?? null,
@@ -506,7 +527,7 @@ class FlightB2BController extends Controller
 
         // Enforce account status permissions
         if ($role === 'AGENT' && ! $agent->isOperational()) {
-            return ApiResponse::errors(null, 'Agent account or parent distributor is suspended. Booking creation forbidden.', 422);
+            return ApiResponse::errors(null, 'This B2B agent account is suspended. Booking creation forbidden.', 422);
         }
         if ($role === 'DISTRIBUTOR' && ! $distributor->isActive()) {
             return ApiResponse::errors(null, 'Distributor account is suspended. Booking creation forbidden.', 422);
@@ -523,6 +544,11 @@ class FlightB2BController extends Controller
             'passengers.*.passenger_type'          => 'nullable|string',
             'passengers.*.date_of_birth'           => 'nullable|date',
             'passengers.*.gender'                  => 'nullable|string',
+            // Kept so international bookings can pass the passport check.
+            'passengers.*.nationality'             => 'nullable|string|max:3',
+            'passengers.*.passport_number'         => 'nullable|string|max:30',
+            'passengers.*.passport_expiry'         => 'nullable|date',
+            'passengers.*.passport_country'        => 'nullable|string|max:3',
             'contact_name'                         => 'nullable|string|max:150',
             'contact_email'                        => 'nullable|email|max:150',
             'contact_phone'                        => 'nullable|string|max:50',
@@ -549,8 +575,14 @@ class FlightB2BController extends Controller
             }
         }
 
-        // Attach B2B Metadata and Commission info
-        $meta = $validated['meta'] ?? [];
+        // Attach B2B Metadata and Commission info. Who booked and what they
+        // earn are set here only: a client-sent agent_id / agent_commission
+        // would otherwise be paid into the wallet at pay-wallet time.
+        $meta = collect($validated['meta'] ?? [])->except([
+            'agent_id', 'agent_name', 'agent_commission', 'agent_commission_rate',
+            'distributor_id', 'distributor_name', 'distributor_commission', 'distributor_commission_rate',
+            'b2b_channel',
+        ])->all();
         if ($role === 'AGENT') {
             $meta['agent_id'] = $agent->id;
             $meta['agent_name'] = $agent->name;
@@ -572,11 +604,31 @@ class FlightB2BController extends Controller
         $quote = FlightFareQuote::where('quote_id', $quoteId)->orWhere('id', is_numeric($quoteId) ? (int)$quoteId : 0)->first();
         if ($quote) {
             $totalAmount = (float) $quote->customer_price;
-            $agentCommRate = (float) ($agent?->commission_rate ?? 3.0);
-            $distCommRate = (float) ($distributor?->commission_rate ?? ($agent?->distributor?->commission_rate ?? 2.0));
+            // Each partner earns only its own configured rate. A direct agent
+            // (no distributor) has no distributor commission, and the agency's
+            // own bookings earn none.
+            $agentCommRate = (float) ($agent?->commission_rate ?? 0.0);
+            $distCommRate = (float) ($distributor?->commission_rate ?? 0.0);
 
             $meta['agent_commission'] = round($totalAmount * ($agentCommRate / 100), 2);
             $meta['distributor_commission'] = round($totalAmount * ($distCommRate / 100), 2);
+
+            // International is decided from the flight's airports, not the
+            // client, so passport details can't be skipped by leaving it off.
+            // Airports are read without the per-agency catalog filter: the ids
+            // come from the flight itself, and a starter-catalog airport would
+            // otherwise look missing to an agent.
+            $inventory = $quote->flight_inventory_id
+                ? \Modules\Flight\Models\FlightInventory::find($quote->flight_inventory_id)
+                : null;
+            $countries = $inventory
+                ? \Modules\Flight\Models\FlightAirport::withoutGlobalScopes()
+                    ->whereIn('id', [$inventory->origin_airport_id, $inventory->destination_airport_id])
+                    ->pluck('country_code', 'id')
+                : collect();
+            $fromCountry = $inventory ? $countries->get($inventory->origin_airport_id) : null;
+            $toCountry = $inventory ? $countries->get($inventory->destination_airport_id) : null;
+            $validated['is_international'] = $fromCountry && $toCountry && strtoupper($fromCountry) !== strtoupper($toCountry);
         }
 
         $validated['meta'] = $meta;
@@ -646,12 +698,8 @@ class FlightB2BController extends Controller
             return ApiResponse::errors(null, "Booking [{$identifier}] not found in this tenant.", 404);
         }
 
-        // Ownership check for Agent
-        if ($role === 'AGENT') {
-            $bookingAgentId = (int) ($booking->meta['agent_id'] ?? 0);
-            if ($bookingAgentId !== 0 && $bookingAgentId !== (int) $agent->id) {
-                return ApiResponse::errors(null, 'Agents can only pay for bookings created by their agency.', 403);
-            }
+        if (! $this->actorOwnsBooking($actor, $booking)) {
+            return ApiResponse::errors(null, 'You can only pay for bookings made by your own agency.', 403);
         }
 
         // Resolve target wallet and enforce wallet permissions
@@ -773,17 +821,8 @@ class FlightB2BController extends Controller
             return ApiResponse::errors(null, "Booking [{$identifier}] not found in this tenant.", 404);
         }
 
-        // Ownership enforcement
-        if ($role === 'AGENT') {
-            $bookingAgentId = (int) ($booking->meta['agent_id'] ?? 0);
-            if ($bookingAgentId !== 0 && $bookingAgentId !== (int) $agent->id) {
-                return ApiResponse::errors(null, 'Agents cannot cancel bookings belonging to other agents.', 403);
-            }
-        } elseif ($role === 'DISTRIBUTOR') {
-            $bookingDistId = (int) ($booking->meta['distributor_id'] ?? 0);
-            if ($bookingDistId !== 0 && $bookingDistId !== (int) $distributor->id) {
-                return ApiResponse::errors(null, 'Distributors cannot cancel bookings belonging to other distributors.', 403);
-            }
+        if (! $this->actorOwnsBooking($actor, $booking)) {
+            return ApiResponse::errors(null, 'You can only cancel bookings made by your own agency.', 403);
         }
 
         $reason = $request->input('reason', 'Cancelled via B2B Workspace');
@@ -804,6 +843,10 @@ class FlightB2BController extends Controller
      */
     public function indexDistributors(Request $request): JsonResponse
     {
+        if ($denied = $this->denyUnlessTenantAdmin($request)) {
+            return $denied;
+        }
+
         $query = FlightDistributor::query()
             ->with(['wallet', 'agents'])
             ->withCount('agents')
@@ -832,6 +875,10 @@ class FlightB2BController extends Controller
      */
     public function storeDistributor(Request $request): JsonResponse
     {
+        if ($denied = $this->denyUnlessTenantAdmin($request)) {
+            return $denied;
+        }
+
         $data = $request->validate([
             'name'             => 'required|string|max:255',
             'code'             => 'nullable|string|max:50',
@@ -858,8 +905,12 @@ class FlightB2BController extends Controller
      * Show a distributor's details, wallet, and agents.
      * GET /api/v1/flight/b2b/distributors/{id}
      */
-    public function showDistributor(int $id): JsonResponse
+    public function showDistributor(Request $request, int $id): JsonResponse
     {
+        if ($denied = $this->denyUnlessTenantAdmin($request)) {
+            return $denied;
+        }
+
         $distributor = FlightDistributor::with(['wallet', 'agents.wallet', 'inventoryBalances'])
             ->findOrFail($id);
 
@@ -872,6 +923,10 @@ class FlightB2BController extends Controller
      */
     public function updateDistributor(Request $request, int $id): JsonResponse
     {
+        if ($denied = $this->denyUnlessTenantAdmin($request)) {
+            return $denied;
+        }
+
         $distributor = FlightDistributor::findOrFail($id);
 
         $data = $request->validate([
@@ -901,6 +956,10 @@ class FlightB2BController extends Controller
      */
     public function suspendDistributor(Request $request, int $id): JsonResponse
     {
+        if ($denied = $this->denyUnlessTenantAdmin($request)) {
+            return $denied;
+        }
+
         $distributor = FlightDistributor::findOrFail($id);
         $reason = $request->input('reason', 'Suspended by admin');
 
@@ -916,8 +975,12 @@ class FlightB2BController extends Controller
      * Activate a distributor.
      * POST /api/v1/flight/b2b/distributors/{id}/activate
      */
-    public function activateDistributor(int $id): JsonResponse
+    public function activateDistributor(Request $request, int $id): JsonResponse
     {
+        if ($denied = $this->denyUnlessTenantAdmin($request)) {
+            return $denied;
+        }
+
         $distributor = FlightDistributor::findOrFail($id);
         $distributor->activate();
 
@@ -933,6 +996,10 @@ class FlightB2BController extends Controller
      */
     public function adjustCreditLimit(Request $request, int $id): JsonResponse
     {
+        if ($denied = $this->denyUnlessTenantAdmin($request)) {
+            return $denied;
+        }
+
         $data = $request->validate([
             'credit_limit' => 'required|numeric|min:0',
         ]);
@@ -947,8 +1014,12 @@ class FlightB2BController extends Controller
      * Hierarchy Visualization Tree: Tenant -> Distributors -> Agents.
      * GET /api/v1/flight/b2b/hierarchy
      */
-    public function hierarchy(): JsonResponse
+    public function hierarchy(Request $request): JsonResponse
     {
+        if ($denied = $this->denyUnlessTenantAdmin($request)) {
+            return $denied;
+        }
+
         $tree = $this->service->getHierarchyTree();
         return ApiResponse::success($tree);
     }
@@ -961,6 +1032,10 @@ class FlightB2BController extends Controller
      */
     public function indexAgents(Request $request, int $distributorId): JsonResponse
     {
+        if ($denied = $this->denyUnlessTenantAdmin($request)) {
+            return $denied;
+        }
+
         $distributor = FlightDistributor::findOrFail($distributorId);
 
         $query = $distributor->agents()->with('wallet');
@@ -978,20 +1053,12 @@ class FlightB2BController extends Controller
      */
     public function storeAgent(Request $request, int $distributorId): JsonResponse
     {
-        $distributor = FlightDistributor::findOrFail($distributorId);
+        if ($denied = $this->denyUnlessTenantAdmin($request)) {
+            return $denied;
+        }
 
-        $data = $request->validate([
-            'name'            => 'required|string|max:255',
-            'code'            => 'nullable|string|max:50',
-            'agency_name'     => 'nullable|string|max:255',
-            'iata_number'     => 'nullable|string|max:30',
-            'email'           => 'required|email|max:255',
-            'phone'           => 'nullable|string|max:30',
-            'credit_limit'    => 'nullable|numeric|min:0',
-            'commission_rate' => 'nullable|numeric|min:0|max:100',
-            'initial_balance' => 'nullable|numeric|min:0',
-            'notes'           => 'nullable|string|max:1000',
-        ]);
+        $distributor = FlightDistributor::findOrFail($distributorId);
+        $data = $this->validateAgent($request, $distributor->tenant_id);
 
         try {
             $agent = $this->service->createAgent($distributor, $data);
@@ -1007,6 +1074,10 @@ class FlightB2BController extends Controller
      */
     public function suspendAgent(Request $request, int $id): JsonResponse
     {
+        if ($denied = $this->denyUnlessTenantAdmin($request)) {
+            return $denied;
+        }
+
         $agent = FlightAgent::findOrFail($id);
         $agent->suspend($request->input('reason', 'Suspended'));
 
@@ -1020,8 +1091,12 @@ class FlightB2BController extends Controller
      * Activate an agent.
      * POST /api/v1/flight/b2b/agents/{id}/activate
      */
-    public function activateAgent(int $id): JsonResponse
+    public function activateAgent(Request $request, int $id): JsonResponse
     {
+        if ($denied = $this->denyUnlessTenantAdmin($request)) {
+            return $denied;
+        }
+
         $agent = FlightAgent::findOrFail($id);
         $agent->activate();
 
@@ -1035,8 +1110,12 @@ class FlightB2BController extends Controller
      * View wallet of a distributor.
      * GET /api/v1/flight/b2b/distributor/{id}/wallet
      */
-    public function distributorWallet(int $id): JsonResponse
+    public function distributorWallet(Request $request, int $id): JsonResponse
     {
+        if ($denied = $this->denyUnlessTenantAdmin($request)) {
+            return $denied;
+        }
+
         $distributor = FlightDistributor::with('wallet')->findOrFail($id);
         return ApiResponse::success([
             'distributor_id'   => $distributor->id,
@@ -1050,11 +1129,18 @@ class FlightB2BController extends Controller
      * View inventory balances assigned to a distributor.
      * GET /api/v1/flight/b2b/distributor/{id}/inventory
      */
-    public function distributorInventory(int $id): JsonResponse
+    public function distributorInventory(Request $request, int $id): JsonResponse
     {
+        if ($denied = $this->denyUnlessTenantAdmin($request)) {
+            return $denied;
+        }
+
+        // Same tenant only: the id alone must not reach another agency's seats.
+        $distributor = FlightDistributor::findOrFail($id);
         $balances = FlightInventoryBalance::withoutGlobalTenant()
+            ->where('tenant_id', $distributor->tenant_id)
             ->where('holder_type', HolderType::DISTRIBUTOR->value)
-            ->where('holder_id', $id)
+            ->where('holder_id', $distributor->id)
             ->with(['flightInventory.airline', 'flightInventory.originAirport', 'flightInventory.destinationAirport'])
             ->get();
 
@@ -1067,9 +1153,12 @@ class FlightB2BController extends Controller
      * Agent profile & operational status check.
      * GET /api/v1/flight/b2b/agents/{id}/profile
      */
-    public function agentProfile(int $id): JsonResponse
+    public function agentProfile(Request $request, int $id): JsonResponse
     {
         $agent = FlightAgent::with(['distributor', 'wallet'])->findOrFail($id);
+        if ($denied = $this->denyUnlessAdminOrSelf($request, $agent)) {
+            return $denied;
+        }
 
         return ApiResponse::success([
             'agent'          => $agent,
@@ -1084,14 +1173,225 @@ class FlightB2BController extends Controller
      * View inventory balances assigned to an agent.
      * GET /api/v1/flight/b2b/agents/{id}/inventory
      */
-    public function agentInventory(int $id): JsonResponse
+    public function agentInventory(Request $request, int $id): JsonResponse
     {
+        $agent = FlightAgent::findOrFail($id);
+        if ($denied = $this->denyUnlessAdminOrSelf($request, $agent)) {
+            return $denied;
+        }
+
         $balances = FlightInventoryBalance::withoutGlobalTenant()
+            ->where('tenant_id', $agent->tenant_id)
             ->where('holder_type', HolderType::AGENT->value)
-            ->where('holder_id', $id)
+            ->where('holder_id', $agent->id)
             ->with(['flightInventory.airline', 'flightInventory.originAirport', 'flightInventory.destinationAirport'])
             ->get();
 
         return ApiResponse::success($balances);
+    }
+
+    // ── B2B AGENTS DIRECTLY UNDER THE AGENCY (no distributor) ────────────────
+
+    /**
+     * The agency's B2B partners.
+     * GET /api/v1/flight/b2b/agents?status=&search=&per_page=
+     */
+    public function indexTenantAgents(Request $request): JsonResponse
+    {
+        if ($denied = $this->denyUnlessTenantAdmin($request)) {
+            return $denied;
+        }
+
+        $query = FlightAgent::query()->with('wallet')->latest('id');
+
+        if ($status = $request->query('status')) {
+            $query->where('status', strtoupper((string) $status));
+        }
+        if ($search = trim((string) $request->query('search', ''))) {
+            $query->where(function ($q) use ($search) {
+                $q->where('name', 'like', "%{$search}%")
+                  ->orWhere('agency_name', 'like', "%{$search}%")
+                  ->orWhere('code', 'like', "%{$search}%")
+                  ->orWhere('email', 'like', "%{$search}%")
+                  ->orWhere('phone', 'like', "%{$search}%");
+            });
+        }
+
+        return ApiResponse::pagination($query->paginate($request->integer('per_page', 20)));
+    }
+
+    /**
+     * Add a B2B partner agency directly under the agency.
+     * POST /api/v1/flight/b2b/agents
+     */
+    public function storeTenantAgent(Request $request): JsonResponse
+    {
+        if ($denied = $this->denyUnlessTenantAdmin($request)) {
+            return $denied;
+        }
+
+        $tenant = $this->resolveTenant($request);
+        if (! $tenant) {
+            return ApiResponse::errors(null, 'Tenant context required.', 400);
+        }
+
+        $data = $this->validateAgent($request, $tenant->id);
+
+        try {
+            // The login (when asked for) and the agent are saved together:
+            // if the agent fails, the new user is rolled back too.
+            $agent = \Illuminate\Support\Facades\DB::transaction(function () use ($request, $data, $tenant) {
+                if (! empty($data['login_password'])) {
+                    $data['user_id'] = $this->createAgentLogin($request, $data, $tenant->id)->id;
+                }
+
+                return $this->service->createAgent(null, $data, $tenant->id);
+            });
+
+            return ApiResponse::created($agent);
+        } catch (RuntimeException $e) {
+            return ApiResponse::errors(null, $e->getMessage(), 422);
+        }
+    }
+
+    /**
+     * Creates the Flight Agent user a B2B partner signs in with. Tenant admins
+     * cannot assign the built-in Flight Agent role from the Users screen
+     * (Role::list hides it), so the login is created here instead.
+     */
+    protected function createAgentLogin(Request $request, array $data, int $tenantId): \Modules\User\Models\User
+    {
+        $base = \Illuminate\Support\Str::slug(\Illuminate\Support\Str::before($data['email'], '@'), '_') ?: 'agent';
+        $username = $base;
+        while (\Modules\User\Models\User::query()->withoutGlobalScopes()->where('username', $username)->exists()) {
+            $username = $base.'_'.\Illuminate\Support\Str::lower(\Illuminate\Support\Str::random(4));
+        }
+
+        $user = \Modules\User\Models\User::query()->withoutGlobalScopes()->create([
+            'name'      => $data['name'],
+            'username'  => $username,
+            'email'     => $data['email'],
+            'phone'     => $data['phone'] ?? null,
+            'password'  => $data['login_password'],
+            'tenant_id' => $tenantId,
+            'branch_id' => $request->user()?->branch_id,
+            'can_login' => true,
+            'is_active' => true,
+        ]);
+        $user->syncRoles([DefaultRole::FlightAgent->value]);
+
+        return $user;
+    }
+
+    /**
+     * Edit a B2B partner's details.
+     * PUT /api/v1/flight/b2b/agents/{id}
+     */
+    public function updateTenantAgent(Request $request, int $id): JsonResponse
+    {
+        if ($denied = $this->denyUnlessTenantAdmin($request)) {
+            return $denied;
+        }
+
+        $agent = FlightAgent::findOrFail($id);
+        $data = $this->validateAgent($request, $agent->tenant_id, $agent);
+
+        \Illuminate\Support\Facades\DB::transaction(function () use ($request, $agent, $data) {
+            if (! empty($data['login_password'])) {
+                $data['user_id'] = $this->createAgentLogin($request, [
+                    'name'           => $data['name'] ?? $agent->name,
+                    'email'          => $data['email'] ?? $agent->email,
+                    'phone'          => $data['phone'] ?? $agent->phone,
+                    'login_password' => $data['login_password'],
+                ], $agent->tenant_id)->id;
+            }
+
+            $agent->update(collect($data)->only([
+                'name', 'agency_name', 'iata_number', 'email', 'phone', 'commission_rate', 'notes', 'user_id',
+            ])->all());
+        });
+
+        return ApiResponse::success($agent->fresh(['wallet']));
+    }
+
+    /**
+     * Set how much a B2B partner may book on credit.
+     * POST /api/v1/flight/b2b/agents/{id}/credit-limit
+     */
+    public function adjustAgentCreditLimit(Request $request, int $id): JsonResponse
+    {
+        if ($denied = $this->denyUnlessTenantAdmin($request)) {
+            return $denied;
+        }
+
+        $data = $request->validate(['credit_limit' => 'required|numeric|min:0']);
+        $agent = FlightAgent::findOrFail($id);
+        $wallet = $this->walletService->getOrCreateAgentWallet($agent);
+
+        try {
+            $this->walletService->adjustCreditLimit(
+                $wallet,
+                (float) $data['credit_limit'],
+                $request->user()?->email ?? 'admin',
+                'CREDIT-LIMIT-'.$agent->code,
+            );
+        } catch (\Throwable $e) {
+            return ApiResponse::errors(null, $e->getMessage(), 422);
+        }
+        $agent->update(['credit_limit' => (float) $data['credit_limit']]);
+
+        return ApiResponse::success($agent->fresh(['wallet']));
+    }
+
+    /** Agency admins, or the agent looking at its own record. */
+    protected function denyUnlessAdminOrSelf(Request $request, FlightAgent $agent): ?JsonResponse
+    {
+        $user = $request->user();
+        if ($this->isTenantAdmin($user) || ($user && (int) $agent->user_id === (int) $user->id)) {
+            return null;
+        }
+
+        return ApiResponse::errors(null, 'You can only view your own B2B account.', 403);
+    }
+
+    /**
+     * Shared rules for creating / editing a B2B agent. `user_id` links the
+     * partner's login: it must be a user of the same agency, and not already
+     * linked to another agent.
+     */
+    protected function validateAgent(Request $request, int $tenantId, ?FlightAgent $existing = null): array
+    {
+        $required = $existing ? 'sometimes|required' : 'required';
+        $creatingLogin = filled($request->input('login_password'));
+
+        $emailRules = [...explode('|', "{$required}|email|max:255")];
+        if ($creatingLogin) {
+            // The new login signs in with this email, so no user may have it yet.
+            $emailRules[] = \Illuminate\Validation\Rule::unique('users', 'email');
+        }
+
+        return $request->validate([
+            'name'            => "{$required}|string|max:255",
+            'code'            => 'nullable|string|max:50',
+            'agency_name'     => 'nullable|string|max:255',
+            'iata_number'     => 'nullable|string|max:30',
+            'email'           => $emailRules,
+            // Creates a new Flight Agent login for this partner (instead of user_id).
+            'login_password'  => 'nullable|string|min:8|max:255|prohibits:user_id',
+            'phone'           => 'nullable|string|max:30',
+            'credit_limit'    => 'nullable|numeric|min:0',
+            'commission_rate' => 'nullable|numeric|min:0|max:100',
+            'initial_balance' => 'nullable|numeric|min:0',
+            'notes'           => 'nullable|string|max:1000',
+            'user_id'         => [
+                'nullable', 'integer',
+                \Illuminate\Validation\Rule::exists('users', 'id')->where('tenant_id', $tenantId),
+                \Illuminate\Validation\Rule::unique('flight_agents', 'user_id')
+                    ->whereNull('deleted_at')
+                    ->ignore($existing?->id),
+            ],
+        ], [
+            'email.unique' => 'A user with this email already exists. Choose "Use existing user" to link that login instead.',
+        ]);
     }
 }
