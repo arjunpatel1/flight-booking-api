@@ -4,6 +4,7 @@ namespace Modules\Flight\Http\Middleware;
 
 use Closure;
 use Illuminate\Http\Request;
+use Modules\Flight\Models\FlightAgent;
 use Modules\Flight\Models\FlightBooking;
 use Modules\Flight\Models\FlightCustomer;
 use Modules\Flight\Models\FlightPayment;
@@ -65,6 +66,16 @@ class EnsureFlightBookingAccess
 
         $staff = $request->user('api');
         if ($staff instanceof User) {
+            // A B2B partner shares the agency's tenant but may only open the
+            // bookings it made (same rule as the B2B workspace's booking list).
+            if (RestrictB2BPartnerAccess::isPartner($staff)) {
+                $agentId = FlightAgent::query()->where('user_id', $staff->id)->value('id');
+
+                return (int) $booking->tenant_id === (int) $staff->tenantId()
+                    && (((int) $booking->user_id === (int) $staff->id)
+                        || ($agentId && (int) data_get($booking->meta, 'agent_id') === (int) $agentId));
+            }
+
             // Same rule as the tenant scopes: platform admins and users with no
             // agency of their own see everything; agency staff see their agency.
             return $staff->isSuperAdmin()

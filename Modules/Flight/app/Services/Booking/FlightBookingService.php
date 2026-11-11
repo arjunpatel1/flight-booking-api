@@ -425,7 +425,11 @@ class FlightBookingService
     private function applyListFilters(Builder $query, array $filters): void
     {
         if (! empty($filters['status'])) {
-            $query->byStatus($filters['status']);
+            // One status, or several comma-separated (a Bookings page card is a group).
+            $statuses = array_values(array_filter(array_map('trim', explode(',', (string) $filters['status']))));
+            count($statuses) > 1
+                ? $query->whereIn('booking_status', $statuses)
+                : $query->byStatus($statuses[0] ?? (string) $filters['status']);
         }
 
         if (! empty($filters['payment_status'])) {
@@ -468,7 +472,43 @@ class FlightBookingService
             ->map(fn ($count) => (int) $count);
         $count = fn (BookingStatus ...$statuses): int => array_sum(array_map(fn (BookingStatus $s) => $byStatus[$s->value] ?? 0, $statuses));
 
-        return [
+        // Stages for the page cards: every booking is in exactly one, so they add
+        // up to the total. Payment detail is reported inside a stage, never as a
+        // stage of its own (that counted refunded bookings twice).
+        $pairs = (clone $query)
+            ->selectRaw('booking_status, payment_status, COUNT(*) as aggregate')
+            ->groupBy('booking_status', 'payment_status')
+            ->get()
+            ->map(fn ($row) => [
+                'booking' => $row->booking_status instanceof BookingStatus ? $row->booking_status->value : (string) $row->booking_status,
+                'payment' => $row->payment_status instanceof PaymentStatus ? $row->payment_status->value : (string) $row->payment_status,
+                'count'   => (int) $row->aggregate,
+            ]);
+        $sum = fn (array $bookingStatuses, ?\Closure $payment = null): int => (int) $pairs
+            ->filter(fn ($row) => in_array($row['booking'], $bookingStatuses, true) && (! $payment || $payment($row['payment'])))
+            ->sum('count');
+        $beforePayment = [BookingStatus::DRAFT->value, BookingStatus::QUOTED->value, BookingStatus::PAYMENT_PENDING->value];
+        $flying = [BookingStatus::BOOKED->value, BookingStatus::CONFIRMED->value, BookingStatus::COMPLETED->value];
+        $cancelled = [BookingStatus::CANCELLED->value];
+        $isFailed = fn (string $payment) => $payment === PaymentStatus::FAILED->value;
+
+        $stages = [
+            'awaiting_payment' => $sum($beforePayment, fn ($payment) => ! $isFailed($payment)),
+            'awaiting_pnr'     => $sum([BookingStatus::PNR_PENDING->value]),
+            'confirmed'        => $sum($flying),
+            'completed'        => $sum([BookingStatus::COMPLETED->value]),
+            // Of the confirmed ones, how many already have their e-ticket.
+            'confirmed_ticketed' => (clone $query)
+                ->whereIn('booking_status', $flying)
+                ->where('ticket_status', \Modules\Flight\Enums\TicketStatus::ISSUED->value)
+                ->count(),
+            'cancelled'        => $sum($cancelled),
+            'cancelled_refunded' => $sum($cancelled, fn ($payment) => $payment === PaymentStatus::REFUNDED->value),
+            'cancelled_unpaid' => $sum($cancelled, fn ($payment) => in_array($payment, [PaymentStatus::PENDING->value, PaymentStatus::FAILED->value], true)),
+            'failed'           => $sum([BookingStatus::FAILED->value]) + $sum($beforePayment, $isFailed),
+        ];
+
+        return $stages + [
             'total'           => $byStatus->sum(),
             // A failed payment is no longer waiting: the table shows it as Payment Failed.
             'payment_pending' => (clone $query)

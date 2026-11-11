@@ -32,6 +32,14 @@ class FlightRouteController extends Controller
             ->sortBy([['key' => $request->get('sort_by', 'created_at'), 'order' => $request->get('sort_direction', 'desc')]])
             ->paginate($request->get('per_page', 20));
 
+        // A route without a PNR: how many paid bookings are waiting for one, so
+        // the page can offer "Allocate PNR (n)". Routes with a PNR hand it to
+        // their bookings automatically, so nothing waits on them.
+        $routes->getCollection()->each(fn (FlightRoute $route) => $route->setAttribute(
+            'pnr_pending_count',
+            blank($route->pnr_number) ? $this->pnrAllocation->pendingBookingsForRoute($route)->count() : 0,
+        ));
+
         return ApiResponse::pagination($routes);
     }
 
@@ -60,7 +68,7 @@ class FlightRouteController extends Controller
 
         $validated['tenant_id'] = $validated['tenant_id'] ?? $tenantId;
         $this->ensureNotDuplicate($validated, (int) $validated['tenant_id']);
-        $route = FlightRoute::create($validated);
+        $route = FlightRoute::create($this->withSeatCounts($validated, null));
         $route->load(['originAirport', 'destinationAirport']);
 
         return ApiResponse::created($route, message: 'Flight route created successfully');
@@ -133,7 +141,13 @@ class FlightRouteController extends Controller
         $this->ensureNotDuplicate(array_merge($route->only([
             'flight_number', 'origin_airport_id', 'destination_airport_id', 'flight_date', 'flight_time',
         ]), $validated), (int) $route->tenant_id, $route->id);
-        $route->update($validated);
+        // Locked so a booking made while this saves can't be overwritten.
+        $route = DB::transaction(function () use ($route, $validated) {
+            $locked = FlightRoute::query()->lockForUpdate()->findOrFail($route->id);
+            $locked->update($this->withSeatCounts($validated, $locked));
+
+            return $locked;
+        });
         $route->load(['originAirport', 'destinationAirport']);
 
         // Saving a PNR no longer hands it to everyone waiting: the airline may
@@ -154,6 +168,9 @@ class FlightRouteController extends Controller
         return ApiResponse::success([
             'route_id' => $route->id,
             'pnr_number' => $route->pnr_number,
+            // Pre-fills the dialog: the route's PNR, else the one last given to
+            // bookings on this flight that day (same airline PNR, new batch).
+            'suggested_pnr' => $route->pnr_number ?: $this->pnrAllocation->lastAllocatedPnr($route),
             'bookings' => $this->pnrAllocation->pendingBookingsForRoute($route)->map(fn ($booking) => [
                 'booking_reference' => $booking->booking_reference,
                 'contact_name' => $booking->contact_name,
@@ -192,10 +209,10 @@ class FlightRouteController extends Controller
         }
 
         try {
-            if (filled($validated['pnr'] ?? null) && strtoupper($validated['pnr']) !== strtoupper((string) $route->pnr_number)) {
-                $route->update(['pnr_number' => strtoupper($validated['pnr'])]);
-            }
-            $result = $this->pnrAllocation->allocate($route->fresh(), $pnr, $validated['booking_references'], $validated['sold_out_remaining']);
+            // The PNR goes to the chosen bookings only, never onto the route:
+            // the airline confirms seats batch by batch, so later bookings on
+            // this flight keep waiting until the admin gives them a PNR too.
+            $result = $this->pnrAllocation->allocate($route, $pnr, $validated['booking_references'], $validated['sold_out_remaining']);
         } catch (DomainException $e) {
             return ApiResponse::errors(null, $e->getMessage(), 422);
         }
@@ -281,6 +298,32 @@ class FlightRouteController extends Controller
                 'flight_number' => "A route for {$flightNumber} on {$flightDate} at ".substr($flightTime, 0, 5).' between these airports already exists.',
             ]);
         }
+    }
+
+    /**
+     * A dated route is the flight's seat pool on that date, shared by every
+     * cabin: bookings and holds move consumed/available (FlightSeatPool). The
+     * admin only sets the capacity; sold seats are never taken from the form.
+     */
+    private function withSeatCounts(array $validated, ?FlightRoute $route): array
+    {
+        unset($validated['available_seats'], $validated['consumed_seats']);
+
+        $consumed = max(0, (int) ($route?->consumed_seats ?? 0));
+        $total = array_key_exists('total_seats', $validated) && $validated['total_seats'] !== null
+            ? (int) $validated['total_seats']
+            : (int) ($route?->total_seats ?? $validated['total_adult_seats'] ?? 0);
+
+        if ($total < $consumed) {
+            throw ValidationException::withMessages([
+                'total_seats' => "{$consumed} seat(s) are already sold on this flight, so total seats can't be lower than that.",
+            ]);
+        }
+
+        return $validated + [
+            'consumed_seats'  => $consumed,
+            'available_seats' => $total - $consumed,
+        ];
     }
 
     private function flightDetailsRules(): array

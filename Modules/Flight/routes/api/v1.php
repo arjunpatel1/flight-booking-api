@@ -30,10 +30,14 @@ use Modules\Flight\Http\Controllers\Api\V1\FlightSettlementController;
 use Modules\Flight\Http\Controllers\Api\V1\FlightNotificationController;
 use Modules\Flight\Http\Controllers\Api\V1\FlightWebhookController;
 use Modules\Flight\Http\Controllers\Api\V1\FlightCustomerAuthController;
+use Modules\Flight\Http\Middleware\EnsureFlightAgencyAdmin;
 use Modules\Flight\Http\Middleware\EnsureFlightBookingAccess;
+use Modules\Flight\Http\Middleware\RestrictB2BPartnerAccess;
 use Modules\Saas\Http\Middleware\EnsureAuthenticatedTenant;
 
-Route::prefix('flight')->group(function () {
+// RestrictB2BPartnerAccess: B2B partner logins may only reach the public
+// endpoints and their own /b2b workspace endpoints.
+Route::prefix('flight')->middleware(RestrictB2BPartnerAccess::class)->group(function () {
     // Public reference metadata, directory lookups, customer flight search
     Route::withoutMiddleware(['auth', EnsureAuthenticatedTenant::class])->group(function () {
         // Separate budgets: mistakes on the sign-up form never block logging in.
@@ -250,8 +254,8 @@ Route::prefix('flight')->group(function () {
     Route::post('/suppliers/{id}/mappings', [FlightSupplierController::class, 'storeMapping']);
 
     // â”€â”€ Phase 7: Commission Engine + Commission Rules â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    Route::middleware('tenant.feature:flight_commission')->group(function () {
-    Route::get('/commission-rules', [FlightCommissionRuleController::class, 'index']);
+    Route::middleware(['tenant.feature:flight_commission', EnsureFlightAgencyAdmin::class])->group(function () {
+    Route::get('/commission-rules',[FlightCommissionRuleController::class, 'index']);
     Route::post('/commission-rules', [FlightCommissionRuleController::class, 'store']);
     Route::get('/commission-rules/{id}', [FlightCommissionRuleController::class, 'show']);
     Route::put('/commission-rules/{id}', [FlightCommissionRuleController::class, 'update']);
@@ -279,6 +283,12 @@ Route::prefix('flight')->group(function () {
     Route::get('/b2b/distributor/{id}/wallet', [FlightB2BController::class, 'distributorWallet']);
     Route::get('/b2b/distributor/{id}/inventory', [FlightB2BController::class, 'distributorInventory']);
 
+    // B2B partners directly under the agency (no distributor)
+    Route::get('/b2b/agents', [FlightB2BController::class, 'indexTenantAgents']);
+    Route::post('/b2b/agents', [FlightB2BController::class, 'storeTenantAgent']);
+    Route::put('/b2b/agents/{id}', [FlightB2BController::class, 'updateTenantAgent'])->whereNumber('id');
+    Route::post('/b2b/agents/{id}/credit-limit', [FlightB2BController::class, 'adjustAgentCreditLimit'])->whereNumber('id');
+
     // Agent: Status, Profile, Wallet & Inventory
     Route::post('/b2b/agents/{id}/suspend', [FlightB2BController::class, 'suspendAgent']);
     Route::post('/b2b/agents/{id}/activate', [FlightB2BController::class, 'activateAgent']);
@@ -296,8 +306,10 @@ Route::prefix('flight')->group(function () {
     });
 
     // â”€â”€ Phase 9: Wallet + Double-Entry Ledger + Credit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    Route::middleware('tenant.feature:flight_wallet')->group(function () {
-    Route::get('/wallets/workspace', [FlightWalletController::class, 'workspace']);
+    // Agents pay bookings through /b2b/bookings/{ref}/pay-wallet; moving money
+    // in or out of wallets directly is for agency admins only.
+    Route::middleware(['tenant.feature:flight_wallet', EnsureFlightAgencyAdmin::class])->group(function () {
+    Route::get('/wallets/workspace',[FlightWalletController::class, 'workspace']);
     Route::get('/wallets/tenant', [FlightWalletController::class, 'tenantWallet']);
     Route::get('/wallets/ledger/consistency', [FlightWalletController::class, 'verifyLedger']);
     Route::get('/wallets/transactions', [FlightWalletController::class, 'transactions']);

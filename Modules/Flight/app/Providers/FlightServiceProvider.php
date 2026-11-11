@@ -31,6 +31,8 @@ class FlightServiceProvider extends ServiceProvider
             $this->commands([
                 \Modules\Flight\Console\ExpireUnconfirmedPnrBookings::class,
                 \Modules\Flight\Console\ExpireFlightHolds::class,
+                \Modules\Flight\Console\RepairPaidHoldSeats::class,
+                \Modules\Flight\Console\RecountRouteSeats::class,
             ]);
             $this->app->booted(function ($app) {
                 $schedule = $app[\Illuminate\Console\Scheduling\Schedule::class];

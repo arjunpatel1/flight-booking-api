@@ -372,9 +372,40 @@ class FlightPaymentService
             app(\Modules\Flight\Services\Booking\FlightOfferService::class)->redeemForBooking($booking);
             $this->holdService->convertForPaidBooking($booking);
             event(new FlightPaymentConfirmed($payment, $booking));
+            // Ticket as soon as the payment is saved, not only when a webhook arrives.
+            $bookingId = $booking->id;
+            DB::afterCommit(fn () => $this->issueTicketAfterPayment($bookingId));
         }
 
         return $booking;
+    }
+
+    /**
+     * Issue the e-ticket for a booking that was just paid. Runs after the
+     * payment is committed, so a ticketing problem never undoes the payment:
+     * it is logged on the booking (ticketing_error) for staff to retry.
+     * Bookings still waiting for a manual PNR are ticketed when it is entered.
+     */
+    private function issueTicketAfterPayment(int $bookingId): void
+    {
+        $booking = FlightBooking::query()->withoutGlobalScopes()->find($bookingId);
+        if (! $booking
+            || $booking->payment_status !== PaymentStatus::PAID
+            || $booking->isTicketed()
+            || $booking->booking_status === BookingStatus::PNR_PENDING
+            || $booking->booking_status === BookingStatus::CANCELLED) {
+            return;
+        }
+
+        try {
+            app(\Modules\Flight\Services\Ticketing\FlightTicketingService::class)->issueTicket($booking);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('FlightPaymentService: automatic ticketing after payment failed', [
+                'booking' => $booking->booking_reference,
+                'error'   => $e->getMessage(),
+            ]);
+            $booking->forceFill(['ticketing_error' => 'AUTO_TICKETING_FAILED: '.$e->getMessage()])->save();
+        }
     }
 
     /**
@@ -619,9 +650,16 @@ class FlightPaymentService
                 'confirmed_at'      => now(),
             ]);
             app(\Modules\Flight\Services\Booking\FlightOfferService::class)->redeemForBooking($lockedBooking);
+            // The seats are sold now. Without this the hold stayed ACTIVE, its
+            // timer ran out, and expiry put the paid seat back on sale.
+            $this->holdService->convertForPaidBooking($lockedBooking);
 
-            // Emit Domain Event (No ticketing in Phase 15)
+            // Emit Domain Event
             event(new FlightPaymentConfirmed($payment, $lockedBooking));
+            // A wallet payment has no gateway webhook to issue the ticket, so it
+            // used to sit "ticket pending" until someone downloaded it.
+            $bookingId = $lockedBooking->id;
+            DB::afterCommit(fn () => $this->issueTicketAfterPayment($bookingId));
 
             return $payment->refresh();
         });
