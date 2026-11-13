@@ -80,18 +80,11 @@ class FlightPaymentService
         // 2. Authoritative amount from booking & confirmed ancillaries (NEVER trust frontend)
         $payableAmount = $this->calculateAuthoritativeAmount($booking);
         $currency = $booking->currency ?: 'INR';
-        $gateway = strtolower($params['gateway'] ?? 'razorpay');
-        if (! in_array($gateway, ['razorpay', 'mock'], true)) {
-            throw new DomainException('Unsupported flight payment gateway.');
-        }
-        if ($gateway === 'mock' && ! app()->environment('local', 'testing')) {
-            throw new DomainException('Mock payments are disabled outside local and test environments.');
-        }
-        if ($gateway === 'razorpay' && ! app()->environment('local', 'testing')
-            && ! \Modules\Payment\Models\TenantPaymentGatewayConfig::query()->withoutGlobalScopes()
-                ->where('tenant_id', $booking->tenant_id)->where('provider', 'razorpay')->where('enabled', true)->exists()) {
-            throw new DomainException('Online payment is not enabled for this agency.');
-        }
+        $existingGateway = ($params['idempotency_key'] ?? null) ? FlightPayment::where('flight_booking_id', $booking->id)
+            ->where('idempotency_key', $params['idempotency_key'])
+            ->whereNotIn('status', [FlightPaymentStatus::FAILED, FlightPaymentStatus::CANCELLED])
+            ->value('gateway') : null;
+        $gateway = $this->resolveGateway((int) $booking->tenant_id, $params, $existingGateway);
 
         // 3. Idempotency Check
         $idempotencyKey = $params['idempotency_key'] ?? null;
@@ -100,6 +93,9 @@ class FlightPaymentService
                 ->where('idempotency_key', $idempotencyKey)
                 ->whereNotIn('status', [FlightPaymentStatus::FAILED, FlightPaymentStatus::CANCELLED])
                 ->first();
+            if ($existing && $this->retireExpiredUpi(collect([$existing]))) {
+                $existing = null;
+            }
 
             if ($existing) {
                 if (strtolower($existing->gateway) !== $gateway) {
@@ -116,7 +112,7 @@ class FlightPaymentService
                         'key_id'            => $existing->gateway_response_metadata['key_id'] ?? 'mock_key',
                         'hold_expires_at'    => $hold?->expires_at?->toIso8601String(),
                         'hold_remaining_seconds' => $hold?->remaining_seconds,
-                    ],
+                    ] + $this->upiSession($existing),
                 ];
             }
         }
@@ -143,7 +139,9 @@ class FlightPaymentService
 
         // 5. Generate Upstream Gateway Order
         try {
-            $orderData = $this->gatewayAdapter->createOrder($payment);
+            $orderData = $gateway === 'direct_upi'
+                ? $this->directUpi()->createOrder($payment, (float) $payment->amount, $this->upiMinutes($hold?->expires_at))
+                : $this->gatewayAdapter->createOrder($payment);
         } catch (\Throwable $error) {
             $payment->transitionTo(FlightPaymentStatus::FAILED, [
                 'failure_reason' => 'Payment gateway order could not be created.',
@@ -168,7 +166,7 @@ class FlightPaymentService
                 'key_id'            => $orderData['key_id'] ?? null,
                 'hold_expires_at'   => $hold?->expires_at?->toIso8601String(),
                 'hold_remaining_seconds' => $hold?->remaining_seconds,
-            ],
+            ] + $this->upiSession($payment),
         ];
     }
 
@@ -245,18 +243,12 @@ class FlightPaymentService
             throw new DomainException('This trip is incomplete. Please search and book the flights again.');
         }
 
-        $gateway = strtolower($params['gateway'] ?? 'razorpay');
-        if (! in_array($gateway, ['razorpay', 'mock'], true)) {
-            throw new DomainException('Unsupported flight payment gateway.');
-        }
-        if ($gateway === 'mock' && ! app()->environment('local', 'testing')) {
-            throw new DomainException('Mock payments are disabled outside local and test environments.');
-        }
-        if ($gateway === 'razorpay' && ! app()->environment('local', 'testing')
-            && ! \Modules\Payment\Models\TenantPaymentGatewayConfig::query()->withoutGlobalScopes()
-                ->where('tenant_id', $lead->tenant_id)->where('provider', 'razorpay')->where('enabled', true)->exists()) {
-            throw new DomainException('Online payment is not enabled for this agency.');
-        }
+        $existingGateway = ($params['idempotency_key'] ?? null) ? FlightPayment::query()
+            ->where('trip_reference', $lead->trip_reference)
+            ->where('idempotency_key', $params['idempotency_key'])
+            ->whereNotIn('status', [FlightPaymentStatus::FAILED, FlightPaymentStatus::CANCELLED])
+            ->value('gateway') : null;
+        $gateway = $this->resolveGateway((int) $lead->tenant_id, $params, $existingGateway);
 
         foreach ($bookings as $booking) {
             $this->verifyBookingPayability($booking);
@@ -283,6 +275,9 @@ class FlightPaymentService
                 ->where('idempotency_key', $idempotencyKey)
                 ->whereNotIn('status', [FlightPaymentStatus::FAILED, FlightPaymentStatus::CANCELLED])
                 ->get();
+            if ($existing->isNotEmpty() && $this->retireExpiredUpi($existing)) {
+                $existing = collect();
+            }
             $sameOrder = $existing->pluck('gateway_order_id')->filter()->unique();
             $sameAmounts = $existing->count() === $bookings->count()
                 && $existing->every(fn (FlightPayment $payment) => abs((float) $payment->amount - (float) ($amounts[$payment->flight_booking_id] ?? -1)) < 0.01);
@@ -317,7 +312,9 @@ class FlightPaymentService
         $leadPayment = $payments->firstWhere('flight_booking_id', $lead->id) ?? $payments->first();
 
         try {
-            $orderData = $this->gatewayAdapter->createOrder($leadPayment, $total);
+            $orderData = $gateway === 'direct_upi'
+                ? $this->directUpi()->createOrder($leadPayment, $total, $this->upiMinutes($holds->min(fn (FlightHold $hold) => $hold->expires_at)))
+                : $this->gatewayAdapter->createOrder($leadPayment, $total);
         } catch (\Throwable $error) {
             $payments->each(fn (FlightPayment $payment) => $payment->transitionTo(FlightPaymentStatus::FAILED, [
                 'failure_reason' => 'Payment gateway order could not be created.',
@@ -360,7 +357,7 @@ class FlightPaymentService
                 'currency'          => $leadPayment->currency,
                 'key_id'            => $leadPayment->gateway_response_metadata['key_id'] ?? 'mock_key',
                 'trip_reference'    => $leadPayment->trip_reference,
-            ], $holdSession),
+            ] + $this->upiSession($leadPayment), $holdSession),
         ];
     }
 
@@ -509,6 +506,14 @@ class FlightPaymentService
         }
         if (in_array($booking->booking_status, [BookingStatus::CANCELLED, BookingStatus::FAILED, BookingStatus::COMPLETED], true)) {
             throw new DomainException("A {$booking->booking_status->value} booking cannot be marked as paid.");
+        }
+
+        $upiPayments = FlightPayment::where('flight_booking_id', $booking->id)
+            ->where('gateway', 'direct_upi')->whereNotNull('gateway_order_id')->latest('id')->get();
+        foreach ($upiPayments as $upiPayment) {
+            if ($this->syncDirectUpiPayment($upiPayment)->status === FlightPaymentStatus::COMPLETED) {
+                return ['paid' => true, 'booking' => $booking->refresh()];
+            }
         }
 
         $payments = FlightPayment::where('flight_booking_id', $booking->id)
@@ -862,7 +867,16 @@ class FlightPaymentService
             $query->where('tenant_id', $tenant->id);
         }
 
-        return $query->firstOrFail();
+        $payment = $query->firstOrFail();
+        // While the customer's UPI QR is open, each status check asks the gateway
+        // (at most once every 3 seconds per payment).
+        if (strtolower((string) $payment->gateway) === 'direct_upi' && $payment->status !== FlightPaymentStatus::COMPLETED
+            && \Illuminate\Support\Facades\Cache::add('flight-upi-sync:'.$payment->id, 1, 3)) {
+            $this->syncDirectUpiPayment($payment);
+            $payment = (clone $query)->firstOrFail();
+        }
+
+        return $payment;
     }
 
     /**
@@ -1111,5 +1125,149 @@ class FlightPaymentService
                 throw new DomainException('Agent account is suspended.');
             }
         }
+    }
+
+    // ── Direct UPI (the agency's own UPI QR gateway) ───────────────────────
+
+    private function directUpi(): FlightDirectUpiGateway
+    {
+        return app(FlightDirectUpiGateway::class);
+    }
+
+    /**
+     * 'auto' lets the server pick the agency's online gateway: Direct UPI when it
+     * is set up (unless Razorpay is marked preferred), otherwise Razorpay. A retry
+     * keeps the gateway of the payment it is resuming.
+     */
+    private function resolveGateway(int $tenantId, array $params, ?string $existingGateway): string
+    {
+        $gateway = strtolower($params['gateway'] ?? 'razorpay');
+        if ($gateway === 'auto') {
+            $gateway = $existingGateway ? strtolower($existingGateway) : $this->preferredOnlineGateway($tenantId);
+        }
+        if (! in_array($gateway, ['razorpay', 'mock', 'direct_upi'], true)) {
+            throw new DomainException('Unsupported flight payment gateway.');
+        }
+        if ($gateway === 'mock' && ! app()->environment('local', 'testing')) {
+            throw new DomainException('Mock payments are disabled outside local and test environments.');
+        }
+        if ($gateway === 'razorpay' && ! app()->environment('local', 'testing')
+            && ! \Modules\Payment\Models\TenantPaymentGatewayConfig::query()->withoutGlobalScopes()
+                ->where('tenant_id', $tenantId)->where('provider', 'razorpay')->where('enabled', true)->exists()) {
+            throw new DomainException('Online payment is not enabled for this agency.');
+        }
+        if ($gateway === 'direct_upi' && ! $this->directUpi()->isAvailable($tenantId)) {
+            throw new DomainException('UPI payment is not set up for this agency.');
+        }
+
+        return $gateway;
+    }
+
+    public function preferredOnlineGateway(int $tenantId): string
+    {
+        if (! $this->directUpi()->isAvailable($tenantId)) {
+            return 'razorpay';
+        }
+        $preferred = \Modules\Payment\Models\TenantPaymentGatewayConfig::query()->withoutGlobalScopes()
+            ->where('tenant_id', $tenantId)->where('enabled', true)->where('preferred', true)->value('provider');
+
+        return $preferred === 'razorpay' ? 'razorpay' : 'direct_upi';
+    }
+
+    /** UPI QR details for the checkout; empty for other gateways. */
+    private function upiSession(FlightPayment $payment): array
+    {
+        if (strtolower((string) $payment->gateway) !== 'direct_upi') {
+            return [];
+        }
+        $meta = (array) ($payment->gateway_response_metadata ?? []);
+
+        return [
+            'qr_data'        => $meta['qr_data'] ?? null,
+            'intent_url'     => $meta['intent_url'] ?? null,
+            'upi_expires_at' => $meta['expires_at'] ?? null,
+        ];
+    }
+
+    private function upiMinutes(?\DateTimeInterface $holdExpiresAt): int
+    {
+        if (! $holdExpiresAt) {
+            return 15;
+        }
+
+        return (int) max(1, min(15, floor(($holdExpiresAt->getTimestamp() - time()) / 60)));
+    }
+
+    /**
+     * An open UPI payment whose QR has expired cannot be reused. Check it one last
+     * time (the customer may have paid in the final seconds); if still unpaid, close
+     * it so the caller creates a fresh QR. Returns true when it was closed.
+     */
+    private function retireExpiredUpi(\Illuminate\Support\Collection $payments): bool
+    {
+        $lead = $payments->first();
+        $expiresAt = data_get($lead?->gateway_response_metadata, 'expires_at');
+        if (! $lead || strtolower((string) $lead->gateway) !== 'direct_upi' || ! $expiresAt
+            || Carbon::parse($expiresAt)->isFuture()) {
+            return false;
+        }
+        if ($this->syncDirectUpiPayment($lead)->status === FlightPaymentStatus::COMPLETED) {
+            return false;
+        }
+        foreach ($payments as $payment) {
+            if ($payment->status->canTransitionTo(FlightPaymentStatus::FAILED)) {
+                $payment->transitionTo(FlightPaymentStatus::FAILED, ['failure_reason' => 'UPI QR expired before payment.']);
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Ask the UPI gateway whether this payment was made, and confirm the booking
+     * (every flight of a trip) only when the gateway reports PAID for exactly this
+     * order and amount. The browser and the webhook body are never trusted for this.
+     */
+    public function syncDirectUpiPayment(FlightPayment $payment): FlightPayment
+    {
+        if (strtolower((string) $payment->gateway) !== 'direct_upi'
+            || in_array($payment->status, [FlightPaymentStatus::COMPLETED, FlightPaymentStatus::REFUNDED, FlightPaymentStatus::CANCELLED], true)) {
+            return $payment;
+        }
+        $remote = $this->directUpi()->fetch($payment);
+        if (! $remote || strtoupper((string) ($remote['status'] ?? '')) !== 'PAID') {
+            return $payment;
+        }
+
+        $siblings = $this->orderSiblings($payment);
+        $matches = hash_equals((string) $payment->gateway_order_id, (string) ($remote['id'] ?? ''))
+            && $siblings->pluck('payment_reference')->contains((string) ($remote['merchant_order_id'] ?? ''))
+            && abs((float) ($remote['amount'] ?? -1) - $this->orderTotal($siblings)) < 0.01
+            && strtoupper((string) ($remote['currency'] ?? 'INR')) === strtoupper((string) ($payment->currency ?: 'INR'));
+        if (! $matches) {
+            \Illuminate\Support\Facades\Log::warning('Flight UPI payment does not match the gateway record', [
+                'payment_reference' => $payment->payment_reference, 'gateway_payment_id' => $remote['id'] ?? null,
+            ]);
+
+            return $payment;
+        }
+
+        $closed = $siblings->contains(function (FlightPayment $sibling) {
+            $status = FlightBooking::whereKey($sibling->flight_booking_id)->first()?->booking_status;
+
+            return in_array($status, [BookingStatus::CANCELLED, BookingStatus::FAILED], true);
+        });
+        if ($closed) {
+            // Money arrived after the booking was released: staff must refund or rebook.
+            \Illuminate\Support\Facades\Log::warning('Flight UPI payment received for a closed booking', [
+                'payment_reference' => $payment->payment_reference, 'gateway_payment_id' => $remote['id'] ?? null,
+            ]);
+
+            return $payment;
+        }
+
+        $this->completeCheckedPayment($payment, (string) ($remote['transaction_reference'] ?? $remote['id']));
+
+        return $payment->refresh();
     }
 }

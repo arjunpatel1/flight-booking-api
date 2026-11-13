@@ -130,6 +130,19 @@ class DirectUpiService
                 return;
             }
             if (! $session) {
+                // Flight bookings use their own payment records. The signed webhook only
+                // prompts a server-side check with the gateway; its body confirms nothing.
+                $flightPayment = class_exists(\Modules\Flight\Models\FlightPayment::class)
+                    ? \Modules\Flight\Models\FlightPayment::query()->withoutGlobalScopes()
+                        ->where('tenant_id', $config->tenant_id)->where('gateway', 'direct_upi')
+                        ->where('gateway_order_id', $providerPaymentId)->first()
+                    : null;
+                if ($flightPayment) {
+                    DB::afterCommit(fn () => app(\Modules\Flight\Services\Payment\FlightPaymentService::class)->syncDirectUpiPayment($flightPayment));
+                    $event->update(['processing_status' => 'processed', 'processed_at' => now()]);
+
+                    return;
+                }
                 $event->update(['processing_status' => 'rejected', 'failure_code' => 'unknown_session', 'processed_at' => now()]);
 
                 return;
