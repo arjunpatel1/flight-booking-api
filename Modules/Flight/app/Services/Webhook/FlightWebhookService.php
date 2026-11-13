@@ -324,9 +324,12 @@ class FlightWebhookService
             return false;
         }
 
-        $webhookSecret = $secret ?: config('flight.payments.razorpay.webhook_secret', 'secret_test_webhook');
+        $webhookSecret = $secret ?: (config('flight.payments.razorpay.webhook_secret') ?: config('payment.gateways.razorpay.webhook_secret'));
+        if (empty($webhookSecret) && app()->environment('local', 'testing')) {
+            $webhookSecret = 'secret_test_webhook';
+        }
         if (empty($webhookSecret)) {
-            return true;
+            return false;
         }
 
         $expected = hash_hmac('sha256', $rawBody, $webhookSecret);
@@ -345,9 +348,12 @@ class FlightWebhookService
             return false;
         }
 
-        $webhookSecret = $secret ?: config('flight.payments.stripe.webhook_secret', 'whsec_test_secret');
+        $webhookSecret = $secret ?: config('flight.payments.stripe.webhook_secret');
+        if (empty($webhookSecret) && app()->environment('local', 'testing')) {
+            $webhookSecret = 'whsec_test_secret';
+        }
         if (empty($webhookSecret)) {
-            return true;
+            return false;
         }
 
         // Parse t=timestamp,v1=signature
@@ -383,6 +389,10 @@ class FlightWebhookService
 
     protected function verifyTwilioSignature(string $rawBody, array $headers, ?string $secret = null): bool
     {
+        if (! app()->environment('local', 'testing')) {
+            return false;
+        }
+
         $sig = $headers['x-twilio-signature'] ?? ($headers['X-Twilio-Signature'] ?? null);
         if (is_array($sig)) {
             $sig = $sig[0] ?? null;
@@ -398,6 +408,10 @@ class FlightWebhookService
 
     protected function verifyMockSignature(array $headers, ?string $secret = null): bool
     {
+        if (! app()->environment('local', 'testing')) {
+            return false;
+        }
+
         $sig = $headers['x-mock-signature'] ?? ($headers['X-Mock-Signature'] ?? ($headers['x-webhook-signature'] ?? null));
         if (is_array($sig)) {
             $sig = $sig[0] ?? null;
@@ -417,7 +431,11 @@ class FlightWebhookService
             return false;
         }
 
-        $webhookSecret = $secret ?: 'default_flight_webhook_secret';
+        $webhookSecret = $secret ?: (app()->environment('local', 'testing') ? 'default_flight_webhook_secret' : null);
+        if (empty($webhookSecret)) {
+            return false;
+        }
+
         $expected = hash_hmac('sha256', $rawBody, $webhookSecret);
 
         return hash_equals($expected, (string) $sig);

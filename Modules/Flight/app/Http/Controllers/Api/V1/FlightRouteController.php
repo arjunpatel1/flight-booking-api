@@ -91,9 +91,13 @@ class FlightRouteController extends Controller
             ?? $request->attributes->get('tenant')?->id
             ?? $request->header('X-Tenant-ID')
             ?? $request->query('tenant_id');
-        abort_unless($tenantId, 400, 'A tenant identifier is required to load flight dates.');
+        // The central storefront has no selected agency; keep its calendar open.
+        if ($tenantId === null) {
+            return ApiResponse::success(['dates' => []]);
+        }
+        abort_unless(filter_var($tenantId, FILTER_VALIDATE_INT) !== false && (int) $tenantId > 0, 400, 'Invalid tenant identifier.');
 
-        $tenant = Tenant::query()->withoutGlobalScopes()->findOrFail((int) $tenantId);
+        $tenant = Tenant::query()->withoutGlobalScopes()->where('is_active', true)->findOrFail((int) $tenantId);
         $minDays = max(0, (int) data_get($tenant->settings, 'flight_booking.minimum_advance_booking_days', 0));
         $airport = fn (string $code) => fn ($query) => $query->withoutGlobalScopes()->where('iata_code', strtoupper($code));
 

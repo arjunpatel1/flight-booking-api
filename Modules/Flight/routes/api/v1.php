@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 
 use Illuminate\Support\Facades\Route;
 use Modules\Flight\Http\Controllers\Api\V1\FlightAircraftController;
@@ -62,6 +62,7 @@ Route::prefix('flight')->middleware(RestrictB2BPartnerAccess::class)->group(func
         Route::get('/fare-families', [FlightFareFamilyController::class, 'index']);
         Route::get('/fare-families/{identifier}', [FlightFareFamilyController::class, 'show']);
         Route::get('/configuration/{key}', [FlightBookingSettingsController::class, 'showConfiguration']);
+        Route::get('/public/booking-window', [FlightBookingSettingsController::class, 'showPublicBookingWindow']);
         Route::get('/public/refund-policy', [FlightBookingSettingsController::class, 'showPublicRefundPolicy']);
         Route::get('/public/route-dates', [FlightRouteController::class, 'flyingDates']);
 

@@ -87,6 +87,11 @@ class FlightPaymentService
         if ($gateway === 'mock' && ! app()->environment('local', 'testing')) {
             throw new DomainException('Mock payments are disabled outside local and test environments.');
         }
+        if ($gateway === 'razorpay' && ! app()->environment('local', 'testing')
+            && ! \Modules\Payment\Models\TenantPaymentGatewayConfig::query()->withoutGlobalScopes()
+                ->where('tenant_id', $booking->tenant_id)->where('provider', 'razorpay')->where('enabled', true)->exists()) {
+            throw new DomainException('Online payment is not enabled for this agency.');
+        }
 
         // 3. Idempotency Check
         $idempotencyKey = $params['idempotency_key'] ?? null;
@@ -246,6 +251,11 @@ class FlightPaymentService
         }
         if ($gateway === 'mock' && ! app()->environment('local', 'testing')) {
             throw new DomainException('Mock payments are disabled outside local and test environments.');
+        }
+        if ($gateway === 'razorpay' && ! app()->environment('local', 'testing')
+            && ! \Modules\Payment\Models\TenantPaymentGatewayConfig::query()->withoutGlobalScopes()
+                ->where('tenant_id', $lead->tenant_id)->where('provider', 'razorpay')->where('enabled', true)->exists()) {
+            throw new DomainException('Online payment is not enabled for this agency.');
         }
 
         foreach ($bookings as $booking) {

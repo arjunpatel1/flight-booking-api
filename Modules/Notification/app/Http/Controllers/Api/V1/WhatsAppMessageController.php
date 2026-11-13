@@ -47,6 +47,12 @@ class WhatsAppMessageController extends Controller
             'template' => ['nullable', Rule::in($allowedTemplates)],
         ]);
 
+        // A bare 10-digit Indian mobile would otherwise be read as a country code
+        // and sent to the wrong number (63... is the Philippines).
+        if (strlen($data['recipient']) === 10) {
+            $data['recipient'] = '91'.$data['recipient'];
+        }
+
         abort_unless(setting('whatsapp_provider') === 'nexmsg', 422, 'Select and save NexMsg as the WhatsApp provider first.');
         abort_unless(setting('whatsapp_enabled'), 422, 'Enable and save WhatsApp messaging first.');
 
@@ -69,7 +75,11 @@ class WhatsAppMessageController extends Controller
         $testOrderTarget = $testOrder
             ? $baseUrl.'/admin/orders/'.$testOrder->id.'/show'
             : $baseUrl.'/admin/orders';
-        $result = $factory->make(\Modules\Notification\Enums\WhatsAppProvider::NexMsg)->sendTemplate(
+        // Any template variable without a named sample below still needs a value:
+        // Meta rejects a template with an empty parameter (#131008).
+        $templateVariables = (array) ($configured['variables'] ?? $definition['variables'] ?? []);
+        try {
+            $result = $factory->make(\Modules\Notification\Enums\WhatsAppProvider::NexMsg)->sendTemplate(
             $data['recipient'],
             $providerTemplate,
             [
@@ -120,8 +130,16 @@ class WhatsAppMessageController extends Controller
                 'gift_name' => 'Template preview gift',
                 'reward_name' => 'Template preview reward',
                 'points_balance' => '100',
-            ],
+                'booking_reference' => $testReference,
+                'customer_phone' => $data['recipient'],
+                'flight' => 'AI 101 HYD-DEL',
+                'travel_date' => now()->addDay()->format('d M Y'),
+                'extra_baggage' => '10 kg',
+            ] + array_fill_keys($templateVariables, 'Test'),
         );
+        } catch (\RuntimeException $e) {
+            abort(422, $e->getMessage());
+        }
 
         return ApiResponse::success([
             'accepted' => true,

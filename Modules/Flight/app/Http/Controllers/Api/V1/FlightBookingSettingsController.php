@@ -31,6 +31,16 @@ class FlightBookingSettingsController extends Controller
         return ApiResponse::success($this->bookingSettings($tenant));
     }
 
+    /** Public calendar hint; staff notification recipients remain private. */
+    public function showPublicBookingWindow(Request $request): JsonResponse
+    {
+        $tenant = $this->tenantForRead($request);
+
+        return ApiResponse::success([
+            'minimum_advance_booking_days' => (int) data_get($tenant?->settings, 'flight_booking.minimum_advance_booking_days', 0),
+        ]);
+    }
+
     public function update(Request $request): JsonResponse
     {
         $data = $request->validate([
@@ -116,7 +126,7 @@ class FlightBookingSettingsController extends Controller
     {
         $tenant = $this->tenantForRead($request);
 
-        return ApiResponse::success(['policy' => $policies->policyFor($tenant)]);
+        return ApiResponse::success(['policy' => $tenant ? $policies->policyFor($tenant) : null]);
     }
 
     public function updateRefundPolicy(Request $request, FlightRefundPolicyService $policies): JsonResponse
@@ -170,7 +180,7 @@ class FlightBookingSettingsController extends Controller
     {
         abort_unless(in_array($key, self::FLIGHT_CONFIGURATION_KEYS, true), 404);
         $tenant = $this->tenantForRead($request);
-        $value = data_get($tenant->settings, "flight_booking.configurations.{$key}");
+        $value = data_get($tenant?->settings, "flight_booking.configurations.{$key}");
 
         return ApiResponse::success([
             'key' => $key,
@@ -221,7 +231,7 @@ class FlightBookingSettingsController extends Controller
         return Tenant::query()->withoutGlobalScopes()->findOrFail($tenantId);
     }
 
-    private function tenantForRead(Request $request): Tenant
+    private function tenantForRead(Request $request): ?Tenant
     {
         $tenantId = $request->user()?->tenant_id
             ?? $request->attributes->get('tenant_id')
@@ -229,8 +239,14 @@ class FlightBookingSettingsController extends Controller
             ?? $request->header('X-Tenant-ID')
             ?? $request->query('tenant_id');
 
-        abort_unless($tenantId, 400, 'A tenant identifier is required to load flight configuration.');
+        // The central storefront searches across tenants and has no single
+        // configuration or refund policy until an agency has been selected.
+        if ($tenantId === null) {
+            return null;
+        }
 
-        return Tenant::query()->withoutGlobalScopes()->findOrFail((int) $tenantId);
+        abort_unless(filter_var($tenantId, FILTER_VALIDATE_INT) !== false && (int) $tenantId > 0, 400, 'Invalid tenant identifier.');
+
+        return Tenant::query()->withoutGlobalScopes()->where('is_active', true)->findOrFail((int) $tenantId);
     }
 }
