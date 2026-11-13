@@ -289,7 +289,7 @@ class TenantService implements TenantServiceInterface
                 : null,
             'branches:id,tenant_id,name,currency,is_active',
             Schema::hasTable('tenant_feature_limits') ? 'featureLimits' : null,
-            'users:id,tenant_id,branch_id,name,username,email,is_active,mfa_enabled,created_at,updated_at',
+            'users' => fn ($query) => $query->withoutGlobalActive()->select(['id', 'tenant_id', 'branch_id', 'name', 'username', 'email', 'is_active', 'mfa_enabled', 'created_at', 'updated_at']),
             'users.roles:id,name',
             $this->hasProvisioningRunsTable()
                 ? 'latestProvisioningRun:id,uuid,saas_provisioning_runs.tenant_id,status,progress,current_step,error,started_at,completed_at,failed_at,updated_at'

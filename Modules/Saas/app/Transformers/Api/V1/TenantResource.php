@@ -187,16 +187,10 @@ class TenantResource extends JsonResource
             return [];
         }
 
-        // The SaaS control plane manages restaurant owners/administrators, not
-        // every waiter, cashier and kitchen account. Operational staff remain
-        // in the restaurant's People module and are not exposed in this
-        // platform-level resource.
+        // This relation is already scoped to the current tenant. Return every
+        // non-deleted tenant account so the team table stays consistent with
+        // the tenant user count, including inactive or legacy-role accounts.
         return $this->users
-            ->filter(function ($user) {
-                $roles = $user->roles?->pluck('name') ?? collect();
-
-                return $roles->intersect(['enterprise_admin', 'admin_branch'])->isNotEmpty();
-            })
             ->take(10)
             ->map(fn ($user) => [
                 'id' => $user->id,

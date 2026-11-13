@@ -5,9 +5,12 @@ namespace Modules\Saas\Http\Controllers\Api\V1;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\Rules\Password;
 use Modules\Notification\Enums\NotificationChannel;
 use Modules\Notification\Services\NotificationDispatcherService;
 use Modules\Notification\Services\NotificationServiceInterface;
@@ -36,6 +39,7 @@ use Modules\Saas\Services\Provisioning\SaasTenantLifecycleService;
 use Modules\Saas\Transformers\Api\V1\TenantResource;
 use Modules\Support\ApiResponse;
 use Modules\User\Enums\DefaultRole;
+use Modules\User\Enums\GenderType;
 use Modules\User\Models\Role;
 use Modules\Support\InputLimit;
 use Modules\User\Models\Permission;
@@ -263,6 +267,131 @@ class SaasOperationsController extends Controller
         ]);
     }
 
+    public function createTenantUser(Request $request, Tenant $tenant): JsonResponse
+    {
+        $roleNames = [DefaultRole::AdminBranch->value, DefaultRole::FlightAgent->value];
+        $data = $request->validate([
+            'name' => ['required', 'string', 'max:255'],
+            'email' => [
+                'required',
+                'email:rfc',
+                'max:50',
+                Rule::unique('users', 'email')->where(fn ($query) => $query->where('tenant_id', $tenant->id))->withoutTrashed(),
+            ],
+            'gender' => ['required', Rule::enum(GenderType::class)],
+            'role' => ['required', 'string', Rule::in($roleNames)],
+            'branch_id' => [
+                'nullable',
+                'integer',
+                Rule::exists('branches', 'id')->where(fn ($query) => $query->where('tenant_id', $tenant->id)->where('is_active', true)),
+            ],
+            'password' => ['required', 'string', Password::min(8)->max(20)->mixedCase()->numbers()->symbols(), 'confirmed'],
+        ]);
+
+        $branchId = null;
+        if ($data['role'] !== DefaultRole::EnterpriseAdmin->value) {
+            $branchId = $data['branch_id'] ?? null;
+            if ($branchId === null) {
+                $branchIds = Branch::query()->where('tenant_id', $tenant->id)->where('is_active', true)->pluck('id');
+                abort_unless($branchIds->count() === 1, 422, 'Select a branch before adding this team member.');
+                $branchId = $branchIds->first();
+            }
+        }
+
+        $baseUsername = Str::slug(Str::before($data['email'], '@'), '_') ?: 'team_member';
+        $username = $baseUsername;
+        $suffix = 2;
+        while (User::query()->withoutGlobalScopes()->where('tenant_id', $tenant->id)->where('username', $username)->exists()) {
+            $username = $baseUsername.'_'.$suffix++;
+        }
+
+        $tenantUser = DB::transaction(function () use ($data, $tenant, $branchId, $username): User {
+            $user = User::query()->withoutGlobalScopes()->create([
+                'tenant_id' => $tenant->id,
+                'branch_id' => $branchId,
+                'name' => $data['name'],
+                'username' => $username,
+                'email' => $data['email'],
+                'gender' => $data['gender'],
+                'password' => Hash::make($data['password']),
+                'is_active' => true,
+                'can_login' => true,
+            ]);
+            $user->syncRoles([$data['role']]);
+
+            return $user->load('roles:id,name');
+        });
+
+        return ApiResponse::created([
+            'id' => $tenantUser->id,
+            'name' => $tenantUser->name,
+            'username' => $tenantUser->username,
+            'email' => $tenantUser->email,
+            'branch_id' => $tenantUser->branch_id,
+            'roles' => $tenantUser->roles->pluck('name')->values()->all(),
+            'is_active' => (bool) $tenantUser->is_active,
+            'last_activity' => $tenantUser->updated_at ? dateTimeFormat($tenantUser->updated_at) : null,
+        ], message: 'Team member created.');
+    }
+    public function setTenantUserStatus(Request $request, Tenant $tenant, int $user): JsonResponse
+    {
+        $data = $request->validate(['is_active' => ['required', 'boolean']]);
+        $tenantUser = User::query()->withoutGlobalScopes()->where('tenant_id', $tenant->id)->findOrFail($user);
+        abort_if($tenantUser->isMainUser(), 422, 'The platform owner account cannot be changed here.');
+
+        if (! $data['is_active']) {
+            $this->assertTenantAdminAccessRemains($tenant, $tenantUser);
+        }
+
+        $tenantUser->forceFill(['is_active' => (bool) $data['is_active']])->save();
+        $revokedSessions = $data['is_active'] ? 0 : $tenantUser->tokens()->delete();
+
+        return ApiResponse::success([
+            'user_id' => $tenantUser->id,
+            'is_active' => (bool) $tenantUser->is_active,
+            'sessions_revoked' => $revokedSessions,
+        ]);
+    }
+
+    public function deleteTenantUser(Tenant $tenant, int $user): JsonResponse
+    {
+        $tenantUser = User::query()->withoutGlobalScopes()->where('tenant_id', $tenant->id)->findOrFail($user);
+        abort_if($tenantUser->isMainUser(), 422, 'The platform owner account cannot be deleted.');
+        $this->assertTenantAdminAccessRemains($tenant, $tenantUser);
+
+        $deleted = DB::transaction(function () use ($tenantUser): bool {
+            $tenantUser->tokens()->delete();
+
+            return (bool) $tenantUser->forceDelete();
+        });
+
+        return ApiResponse::destroyed(
+            destroyed: $deleted,
+            resource: 'tenant team member',
+            message: 'Team member permanently deleted.'
+        );
+    }
+
+    private function assertTenantAdminAccessRemains(Tenant $tenant, User $tenantUser): void
+    {
+        $isTenantAdmin = $tenantUser->roles()
+            ->whereIn('name', [DefaultRole::EnterpriseAdmin->value, DefaultRole::AdminBranch->value])
+            ->exists();
+
+        if (! $isTenantAdmin || ! $tenantUser->is_active) {
+            return;
+        }
+
+        $anotherActiveAdminExists = User::query()
+            ->withoutGlobalScopes()
+            ->where('tenant_id', $tenant->id)
+            ->where('is_active', true)
+            ->where('id', '!=', $tenantUser->id)
+            ->whereHas('roles', fn ($roles) => $roles->whereIn('name', [DefaultRole::EnterpriseAdmin->value, DefaultRole::AdminBranch->value]))
+            ->exists();
+
+        abort_unless($anotherActiveAdminExists, 422, 'Add or activate another tenant administrator before removing this member.');
+    }
     public function completeOnboarding(Request $request, Tenant $tenant, SaasProvisioningService $service, ProvisioningOrchestratorService $orchestrator): JsonResponse
     {
         if ($request->filled('domain')) {
