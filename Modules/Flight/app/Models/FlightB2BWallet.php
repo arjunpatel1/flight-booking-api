@@ -4,6 +4,7 @@ namespace Modules\Flight\Models;
 
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Modules\Flight\Exceptions\InsufficientBalanceException;
 use Modules\Flight\Services\Wallet\FlightWalletLedgerService;
 use Modules\Saas\Models\Tenant;
 use Modules\Saas\Traits\BelongsToTenant;
@@ -68,10 +69,14 @@ class FlightB2BWallet extends Model
         return sprintf('WALLET:%s-%d', substr($this->owner_type, 0, 3), $this->owner_id);
     }
 
+    /**
+     * What the wallet can spend: its balance only. B2B is prepaid — a partner
+     * books only with money added to the wallet; there is no credit line, so
+     * nobody ends up owing the agency.
+     */
     public function getAvailableCreditAttribute(): float
     {
-        $totalPurchasingPower = $this->balance + $this->credit_limit;
-        return round(max(0.0, $totalPurchasingPower - $this->credit_used), 2);
+        return round(max(0.0, (float) $this->balance), 2);
     }
 
     public function getPurchasingPowerAttribute(): float
@@ -157,13 +162,16 @@ class FlightB2BWallet extends Model
     {
         $openingBalance = (float) $this->balance;
 
-        if ($this->balance >= $amount) {
-            $this->decrement('balance', $amount);
-        } else {
-            $remainder = $amount - $this->balance;
-            $this->update(['balance' => 0.0]);
-            $this->increment('credit_used', $remainder);
+        // Prepaid only: never spend more than the balance (no credit, no debt).
+        if (round($openingBalance, 2) < round($amount, 2)) {
+            throw new InsufficientBalanceException(
+                requestedAmount: $amount,
+                availableCredit: $this->available_credit,
+                balance: $openingBalance,
+                creditLimit: 0.0,
+            );
         }
+        $this->decrement('balance', $amount);
 
         $this->refresh();
         $closingBalance = (float) $this->balance;

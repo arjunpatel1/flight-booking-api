@@ -31,7 +31,8 @@ return [
 
     'allowed_headers' => ['*'],
 
-    'exposed_headers' => [],
+    // Retry-After lets the app tell people how long a rate limit lasts.
+    'exposed_headers' => ['Retry-After'],
 
     // Let browsers reuse a preflight answer instead of sending an extra
     // OPTIONS request (and a full PHP boot) before every API call.

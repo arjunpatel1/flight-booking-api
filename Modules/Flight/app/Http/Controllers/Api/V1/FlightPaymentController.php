@@ -121,7 +121,7 @@ class FlightPaymentController extends Controller
                 'available_credit' => $e->availableCredit,
                 'balance'          => $e->balance,
                 'credit_limit'     => $e->creditLimit,
-            ], 'Insufficient wallet balance / credit limit.', 422);
+            ], 'Not enough money in the wallet. Add money to the wallet and try again.', 422);
         } catch (DomainException $e) {
             return ApiResponse::errors(null, $e->getMessage(), 422);
         } catch (\Throwable $e) {

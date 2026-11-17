@@ -21,7 +21,9 @@ class FlightSubscriptionController extends Controller
 
     protected function resolveTenantId(Request $request): ?int
     {
-        return $request->user()?->tenant_id ?? auth()->user()?->tenant_id;
+        // A tenant user's own tenant; for the platform Super Admin, the tenant
+        // chosen in the console (set by EnsureAuthenticatedTenant).
+        return $request->user()?->tenant_id ?? auth()->user()?->tenant_id ?? $request->attributes->get('tenant_id');
     }
 
     /**

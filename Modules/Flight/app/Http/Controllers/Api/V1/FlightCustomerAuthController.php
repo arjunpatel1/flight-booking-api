@@ -66,11 +66,16 @@ class FlightCustomerAuthController extends Controller
         ]);
 
         $data = $request->validate([
-            'name' => ['required', 'string', 'max:120'],
+            // Same rule as the booking contact name (as on a passport/ID), which
+            // this name pre-fills; the booking form would otherwise reject it.
+            'name' => ['required', 'string', 'max:40', "regex:/^[A-Za-z][A-Za-z .'-]*$/"],
             'email' => ['required', 'email:rfc', 'max:160', Rule::unique('flight_customers', 'email')],
             'phone' => ['required', 'regex:/^[0-9]{7,20}$/', Rule::unique('flight_customers', 'phone')],
             'password' => ['required', 'string', Password::min(8)->mixedCase()->numbers()],
             'remember' => ['sometimes', 'boolean'],
+        ], [
+            'name.regex' => 'Use letters only in your full name (as on the passport/ID).',
+            'name.max' => 'Your full name can be at most 40 characters.',
         ]);
 
         $customer = FlightCustomer::query()->create([
@@ -98,7 +103,11 @@ class FlightCustomerAuthController extends Controller
         $rateLimitKey = 'flight-customer-login:' . sha1($request->ip() . '|' . Str::lower($login));
 
         if (RateLimiter::tooManyAttempts($rateLimitKey, 5)) {
-            return ApiResponse::errors(['code' => 'TOO_MANY_ATTEMPTS'], 'Too many login attempts. Try again shortly.', Response::HTTP_TOO_MANY_REQUESTS);
+            // Same shape as the route limiters: the app tells the customer how long to wait.
+            $retryAfter = max(1, RateLimiter::availableIn($rateLimitKey));
+
+            return ApiResponse::errors(['code' => 'TOO_MANY_ATTEMPTS', 'retry_after' => $retryAfter], 'Too many login attempts. Try again shortly.', Response::HTTP_TOO_MANY_REQUESTS)
+                ->header('Retry-After', (string) $retryAfter);
         }
 
         $customer = FlightCustomer::query()

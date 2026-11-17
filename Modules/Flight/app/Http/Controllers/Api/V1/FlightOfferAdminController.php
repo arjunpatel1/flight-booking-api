@@ -139,8 +139,10 @@ class FlightOfferAdminController extends Controller
 
     private function tenantId(Request $request): int
     {
-        $tenantId = (int) ($request->user()?->tenant_id ?? 0);
-        abort_unless($tenantId > 0, 403, 'A tenant account is required to manage flight offers.');
+        // A tenant user's own tenant; for the platform Super Admin, the tenant
+        // chosen in the console (set by EnsureAuthenticatedTenant).
+        $tenantId = (int) ($request->user()?->tenant_id ?? $request->attributes->get('tenant_id') ?? 0);
+        abort_unless($tenantId > 0, 403, 'Choose a tenant to manage its flight offers.');
 
         return $tenantId;
     }

@@ -18,7 +18,9 @@ trait ResolvesCurrentTenant
 {
     protected function currentTenant(Request $request): Tenant
     {
-        $tenantId = $request->user()?->tenant_id;
+        // A tenant user's own tenant; for the platform Super Admin, the tenant
+        // chosen in the page's Tenant filter (set by ActingTenant).
+        $tenantId = $request->user()?->tenant_id ?? $request->attributes->get('acting_tenant_id');
         abort_unless($tenantId, 422, 'The current account is not assigned to a restaurant.');
 
         return Tenant::query()->withoutGlobalScopes()->withoutGlobalActive()->findOrFail($tenantId);

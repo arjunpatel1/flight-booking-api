@@ -50,13 +50,15 @@ class TenantSubscription extends Model
 
     public function allowedFilterKeys(): array
     {
-        return ['tenant_id', 'subscription_plan_id', 'status', 'from', 'to'];
+        return ['search', 'tenant_id', 'subscription_plan_id', 'status', 'from', 'to'];
     }
 
     public function scopeSearch(Builder $query, string $value): void
     {
-        $query->whereHas('tenant', fn(Builder $query) => $query->whereLike('name', "%{$value}%"))
-            ->orWhereHas('plan', fn(Builder $query) => $query->whereLike('name', "%{$value}%"));
+        // Grouped so the OR can't bypass the other conditions (latest row per tenant).
+        $query->where(fn(Builder $match) => $match
+            ->whereHas('tenant', fn(Builder $query) => $query->whereLike('name', "%{$value}%"))
+            ->orWhereHas('plan', fn(Builder $query) => $query->whereLike('name', "%{$value}%")));
     }
 
     protected function casts(): array
