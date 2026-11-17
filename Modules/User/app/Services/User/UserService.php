@@ -25,6 +25,16 @@ class UserService implements UserServiceInterface
         return __("user::users.user");
     }
 
+    /**
+     * Leave customers out of staff queries. Spatie's role(..., without: true)
+     * throws when the customer role doesn't exist in the current team context
+     * (a Super Admin has no tenant), which made these endpoints return 500.
+     */
+    private function excludeCustomers(Builder $query): void
+    {
+        $query->whereDoesntHave('roles', fn (Builder $roleQuery) => $roleQuery->where('name', DefaultRole::Customer->value));
+    }
+
     /** @inheritDoc */
     public function get(array $filters = [], ?array $sorts = []): LengthAwarePaginator
     {
@@ -45,7 +55,7 @@ class UserService implements UserServiceInterface
             ->query()
             ->withOutGlobalBranchPermission()
             ->withoutGlobalActive()
-            ->role(roles: DefaultRole::Customer, without: true)
+            ->tap(fn (Builder $query) => $this->excludeCustomers($query))
             ->when(auth()->user(), fn (Builder $query, User $actor) => $this->scopeVisibleToActor($query, $actor))
             ->when(
                 $excludeRoles !== [],
@@ -95,7 +105,7 @@ class UserService implements UserServiceInterface
         return $this->getModel()
             ->query()
             ->withOutGlobalBranchPermission()
-            ->role(roles: DefaultRole::Customer, without: true)
+            ->tap(fn (Builder $query) => $this->excludeCustomers($query))
             ->withoutGlobalActive()
             ->when(auth()->user(), fn (Builder $query, User $actor) => $this->scopeVisibleToActor($query, $actor))
             ->with([
@@ -174,7 +184,7 @@ class UserService implements UserServiceInterface
         return $this->getModel()
             ->query()
             ->withOutGlobalBranchPermission()
-            ->role(roles: DefaultRole::Customer, without: true)
+            ->tap(fn (Builder $query) => $this->excludeCustomers($query))
             ->withoutGlobalActive()
             ->when(auth()->user(), fn (Builder $query, User $actor) => $this->scopeVisibleToActor($query, $actor))
             ->whereNot("id", 1)
@@ -275,7 +285,20 @@ class UserService implements UserServiceInterface
     private function scopeVisibleToActor(Builder $query, User $actor): Builder
     {
         if ($actor->isSuperAdmin() && ! $actor->assignedToTenant() && ! $actor->assignedToBranch()) {
-            return $query;
+            // Working inside a tenant chosen in the page's Tenant filter: that
+            // tenant's users only, as its own admin sees them. Otherwise everyone.
+            $actingTenantId = request()->attributes->get('acting_tenant_id');
+            if (! is_numeric($actingTenantId)) {
+                return $query;
+            }
+
+            return $query->where(function (Builder $visible) use ($actingTenantId) {
+                $visible
+                    ->where('tenant_id', (int) $actingTenantId)
+                    ->orWhereHas('branch', fn (Builder $branch) => $branch
+                        ->withoutGlobalScopes()
+                        ->where('tenant_id', (int) $actingTenantId));
+            });
         }
 
         if ($actor->assignedToBranch()) {

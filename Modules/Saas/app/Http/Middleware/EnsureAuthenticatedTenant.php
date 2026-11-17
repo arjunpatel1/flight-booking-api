@@ -6,6 +6,7 @@ use Closure;
 use Illuminate\Http\Request;
 use Modules\Branch\Models\Branch;
 use Modules\Flight\Models\FlightCustomer;
+use Modules\Saas\Support\ActingTenant;
 use Modules\Saas\Support\TenantContext;
 use Modules\Support\ApiResponse;
 use Modules\User\Enums\DefaultRole;
@@ -13,8 +14,10 @@ use Symfony\Component\HttpFoundation\Response;
 
 class EnsureAuthenticatedTenant
 {
-    public function __construct(private readonly TenantContext $context)
-    {
+    public function __construct(
+        private readonly TenantContext $context,
+        private readonly ActingTenant $actingTenant,
+    ) {
     }
 
     public function handle(Request $request, Closure $next): Response
@@ -28,6 +31,14 @@ class EnsureAuthenticatedTenant
         if ($user instanceof FlightCustomer && $request->is('api/v1/flight/customer-auth/*')) {
             return $next($request);
         }
+
+        // The platform Super Admin working inside the tenant chosen in the page's
+        // Tenant filter (X-Tenant-ID). Ignored for every other user and on
+        // platform endpoints; see ActingTenant.
+        if ($error = $this->actingTenant->apply($request, $user)) {
+            return $error;
+        }
+        $tenant = $this->context->get();
 
         // When running on localhost/loopback or servicing flight-domain APIs,
         // resolve tenant context from the authenticated user if the browser host

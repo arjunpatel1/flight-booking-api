@@ -409,7 +409,7 @@ class FlightBookingService
      */
     public function listBookings(array $filters = [], ?Tenant $tenant = null, int $perPage = 15): LengthAwarePaginator
     {
-        $query = FlightBooking::with(['passengers', 'flightInventory.originAirport', 'flightInventory.destinationAirport', 'flightInventory.airline', 'flightFare'])
+        $query = FlightBooking::with(['passengers', 'flightInventory.originAirport', 'flightInventory.destinationAirport', 'flightInventory.airline', 'flightFare', 'hold:id,status,expires_at'])
             ->latest('id');
 
         if ($tenant) {
@@ -491,9 +491,13 @@ class FlightBookingService
         $flying = [BookingStatus::BOOKED->value, BookingStatus::CONFIRMED->value, BookingStatus::COMPLETED->value];
         $cancelled = [BookingStatus::CANCELLED->value];
         $isFailed = fn (string $payment) => $payment === PaymentStatus::FAILED->value;
+        // Unpaid bookings whose seat hold ran out: seats are back on sale, so they
+        // are their own stage instead of inflating "awaiting payment".
+        $holdExpired = (clone $query)->holdEnded()->count();
 
         $stages = [
-            'awaiting_payment' => $sum($beforePayment, fn ($payment) => ! $isFailed($payment)),
+            'awaiting_payment' => $sum($beforePayment, fn ($payment) => ! $isFailed($payment)) - $holdExpired,
+            'hold_expired'     => $holdExpired,
             'awaiting_pnr'     => $sum([BookingStatus::PNR_PENDING->value]),
             'confirmed'        => $sum($flying),
             'completed'        => $sum([BookingStatus::COMPLETED->value]),
@@ -514,6 +518,7 @@ class FlightBookingService
             'payment_pending' => (clone $query)
                 ->whereIn('booking_status', [BookingStatus::PAYMENT_PENDING->value, BookingStatus::QUOTED->value])
                 ->where('payment_status', '!=', PaymentStatus::FAILED->value)
+                ->whereNot(fn (Builder $ended) => $ended->holdEnded())
                 ->count(),
             'pnr_pending'     => $count(BookingStatus::PNR_PENDING),
             'confirmed'       => $count(BookingStatus::BOOKED, BookingStatus::CONFIRMED, BookingStatus::COMPLETED),

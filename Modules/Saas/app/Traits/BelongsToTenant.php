@@ -30,6 +30,15 @@ trait BelongsToTenant
 
             $user = auth()->user();
 
+            // The platform Super Admin working inside a tenant chosen in the
+            // console (EnsureAuthenticatedTenant): same isolation as that
+            // tenant's own users. Without a choice they keep the all-tenant view.
+            if ($user && $user->isSuperAdmin() && ($actingTenantId = self::actingTenantId())) {
+                $builder->where($builder->getModel()->getTable() . '.tenant_id', $actingTenantId);
+
+                return;
+            }
+
             if (! $user || $user->isSuperAdmin() || ! $user->assignedToTenant()) {
                 return;
             }
@@ -48,7 +57,23 @@ trait BelongsToTenant
             if (blank($model->tenant_id) && $user?->assignedToTenant() && ! $user->isSuperAdmin()) {
                 $model->tenant_id = $user->tenantId();
             }
+
+            // Rows the Super Admin creates while working in a tenant belong to it.
+            if (blank($model->tenant_id) && $user?->isSuperAdmin() && ($actingTenantId = self::actingTenantId())) {
+                $model->tenant_id = $actingTenantId;
+            }
         });
+    }
+
+    /** The tenant the platform Super Admin chose for this request, if any. */
+    private static function actingTenantId(): ?int
+    {
+        if (! app()->bound('request')) {
+            return null;
+        }
+        $id = request()->attributes->get('acting_tenant_id');
+
+        return is_numeric($id) ? (int) $id : null;
     }
 
     public function scopeWithoutGlobalTenant(Builder $query): void

@@ -361,7 +361,7 @@ class FlightB2BController extends Controller
             'can_view_tenant_revenue'    => ($role === 'TENANT'),
             'can_view_all_distributors'  => ($role === 'TENANT'),
             'can_view_all_agents'        => in_array($role, ['TENANT', 'DISTRIBUTOR'], true),
-            'can_manage_credit_limit'    => ($role === 'TENANT'),
+            'can_manage_credit_limit'    => false, // prepaid: no credit
             'can_manage_agents'          => in_array($role, ['TENANT', 'DISTRIBUTOR'], true),
             'can_book_wallet'            => true,
             'can_cancel_own_booking'     => true,
@@ -1005,7 +1005,11 @@ class FlightB2BController extends Controller
         ]);
 
         $distributor = FlightDistributor::findOrFail($id);
-        $distributor->adjustCreditLimit((float) $data['credit_limit']);
+        // B2B is prepaid: partners book only with money added to their wallet.
+        if ((float) $data['credit_limit'] > 0) {
+            return ApiResponse::errors(null, 'Credit is not offered. Partners book only with money added to their wallet.', 422);
+        }
+        $distributor->adjustCreditLimit(0.0);
 
         return ApiResponse::success($distributor->fresh(['wallet']));
     }

@@ -120,9 +120,11 @@ class FlightDistributor extends Model
 
     public function adjustCreditLimit(float $newLimit): bool
     {
-        $res = $this->update(['credit_limit' => max(0.0, $newLimit)]);
+        // B2B is prepaid: no credit line for any partner.
+        $newLimit = 0.0;
+        $res = $this->update(['credit_limit' => $newLimit]);
         if ($this->wallet) {
-            $this->wallet->update(['credit_limit' => max(0.0, $newLimit)]);
+            $this->wallet->update(['credit_limit' => $newLimit]);
         }
         return $res;
     }

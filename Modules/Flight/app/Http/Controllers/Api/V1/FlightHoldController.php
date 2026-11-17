@@ -223,6 +223,10 @@ class FlightHoldController extends Controller
     {
         $tenant = $this->resolveTenant($request);
 
+        // Show timed-out holds as expired (and their seats released) even when
+        // the every-minute scheduler hasn't run yet.
+        try { $this->holdService->expireActiveHolds(); } catch (\Throwable $e) { report($e); }
+
         $query = FlightHold::with(['flightInventory', 'flightFare.fareFamily', 'user'])
             ->forTenant($tenant?->id)
             ->orderByDesc('created_at');

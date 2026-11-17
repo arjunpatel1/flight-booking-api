@@ -141,6 +141,8 @@ class SystemBackupService implements SystemBackupServiceInterface
             '--single-transaction',
             '--quick',
             '--skip-lock-tables',
+            // Tablespace info needs the PROCESS privilege and isn't needed to restore.
+            '--no-tablespaces',
             '--host=' . ($connection['host'] ?? '127.0.0.1'),
             '--port=' . ($connection['port'] ?? 3306),
             '--user=' . ($connection['username'] ?? ''),
@@ -148,6 +150,13 @@ class SystemBackupService implements SystemBackupServiceInterface
 
         if ($password !== '') {
             $command[] = '--password=' . $password;
+        }
+
+        // On MySQL 8 with GTIDs, --single-transaction makes mysqldump run
+        // FLUSH TABLES to record the GTID set, which needs the RELOAD privilege
+        // an app user usually lacks. The GTID set isn't needed to restore here.
+        if ($this->mysqldumpSupports('--set-gtid-purged')) {
+            $command[] = '--set-gtid-purged=OFF';
         }
 
         $command[] = $connection['database'];
@@ -173,8 +182,33 @@ class SystemBackupService implements SystemBackupServiceInterface
 
         if (!$process->isSuccessful()) {
             @unlink($outputPath);
-            throw new RuntimeException(trim($process->getErrorOutput()) ?: __('setting::settings.backups.dump_failed'));
+            throw new RuntimeException($this->cleanErrorOutput($process->getErrorOutput()) ?: __('setting::settings.backups.dump_failed'));
         }
+    }
+
+    /** Whether the installed mysqldump accepts an option (MariaDB's has no --set-gtid-purged). */
+    private function mysqldumpSupports(string $option): bool
+    {
+        try {
+            $help = new Process(['mysqldump', '--help']);
+            $help->setTimeout(15);
+            $help->run();
+
+            return str_contains($help->getOutput(), $option);
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
+    /** mysqldump's stderr without the "password on the command line" warning, which isn't the failure. */
+    private function cleanErrorOutput(string $output): string
+    {
+        $lines = array_filter(
+            preg_split('/\R/', $output) ?: [],
+            fn (string $line) => trim($line) !== '' && !str_contains($line, '[Warning]')
+        );
+
+        return trim(implode("\n", $lines));
     }
 
     private function assertRestorable(SystemBackup $backup): void

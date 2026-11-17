@@ -48,7 +48,7 @@ class FlightB2BNetworkService
                 'email'            => $data['email'] ?? (strtolower($code) . '@distributor.test'),
                 'phone'            => $data['phone'] ?? null,
                 'status'           => B2BStatus::ACTIVE->value,
-                'credit_limit'     => (float) ($data['credit_limit'] ?? 0.0),
+                'credit_limit'     => 0.0, // prepaid: no credit
                 'credit_balance'   => (float) ($data['credit_balance'] ?? 0.0),
                 'commission_rate'  => (float) ($data['commission_rate'] ?? 0.0),
                 'allow_sub_agents' => $data['allow_sub_agents'] ?? true,
@@ -63,7 +63,7 @@ class FlightB2BNetworkService
                 'owner_id'     => $distributor->id,
                 'currency'     => $data['currency'] ?? 'INR',
                 'balance'      => (float) ($data['initial_balance'] ?? 0.0),
-                'credit_limit' => (float) ($data['credit_limit'] ?? 0.0),
+                'credit_limit' => 0.0, // prepaid: no credit
                 'credit_used'  => 0.0,
                 'is_active'    => true,
             ]);
@@ -112,7 +112,7 @@ class FlightB2BNetworkService
                 'email'                 => $data['email'] ?? (strtolower($code) . '@agent.test'),
                 'phone'                 => $data['phone'] ?? null,
                 'status'                => B2BStatus::ACTIVE->value,
-                'credit_limit'          => (float) ($data['credit_limit'] ?? 0.0),
+                'credit_limit'          => 0.0, // prepaid: no credit
                 'credit_balance'        => (float) ($data['credit_balance'] ?? 0.0),
                 'commission_rate'       => (float) ($data['commission_rate'] ?? 0.0),
                 'notes'                 => $data['notes'] ?? null,
@@ -125,7 +125,7 @@ class FlightB2BNetworkService
                 'owner_id'     => $agent->id,
                 'currency'     => $data['currency'] ?? 'INR',
                 'balance'      => (float) ($data['initial_balance'] ?? 0.0),
-                'credit_limit' => (float) ($data['credit_limit'] ?? 0.0),
+                'credit_limit' => 0.0, // prepaid: no credit
                 'credit_used'  => 0.0,
                 'is_active'    => true,
             ]);

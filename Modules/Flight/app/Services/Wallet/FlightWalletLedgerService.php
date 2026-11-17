@@ -760,6 +760,10 @@ class FlightWalletLedgerService
         string $reference
     ): FlightB2BWallet {
         $newLimit = round(max(0.0, $newLimit), 2);
+        // B2B is prepaid: partners book only with money added to their wallet.
+        if ($newLimit > 0) {
+            throw new CreditLimitExceededException('Credit is not offered. Partners book only with money added to their wallet.');
+        }
         $walletId = $wallet instanceof FlightB2BWallet ? $wallet->id : $wallet;
 
         return DB::transaction(function () use ($walletId, $newLimit) {

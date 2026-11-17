@@ -33,13 +33,16 @@ use Modules\Flight\Http\Controllers\Api\V1\FlightCustomerAuthController;
 use Modules\Flight\Http\Middleware\EnsureFlightAgencyAdmin;
 use Modules\Flight\Http\Middleware\EnsureFlightBookingAccess;
 use Modules\Flight\Http\Middleware\RestrictB2BPartnerAccess;
+use Modules\Saas\Http\Middleware\ApplyActingTenant;
 use Modules\Saas\Http\Middleware\EnsureAuthenticatedTenant;
 
 // RestrictB2BPartnerAccess: B2B partner logins may only reach the public
 // endpoints and their own /b2b workspace endpoints.
 Route::prefix('flight')->middleware(RestrictB2BPartnerAccess::class)->group(function () {
-    // Public reference metadata, directory lookups, customer flight search
-    Route::withoutMiddleware(['auth', EnsureAuthenticatedTenant::class])->group(function () {
+    // Public reference metadata, directory lookups, customer flight search.
+    // Admin pages use these too, so the platform Super Admin's chosen tenant
+    // (Tenant filter) applies here as well; guests are unaffected.
+    Route::withoutMiddleware(['auth', EnsureAuthenticatedTenant::class])->middleware(ApplyActingTenant::class)->group(function () {
         // Separate budgets: mistakes on the sign-up form never block logging in.
         Route::post('/customer-auth/register', [FlightCustomerAuthController::class, 'register'])->middleware('throttle:flight-customer-register');
         Route::post('/customer-auth/login', [FlightCustomerAuthController::class, 'login'])->middleware('throttle:flight-customer-login');

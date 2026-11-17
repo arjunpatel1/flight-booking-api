@@ -24,7 +24,8 @@ class FlightWalletController extends Controller
 
     protected function resolveTenantId(Request $request): ?int
     {
-        return $request->user()?->tenant_id ?? auth()->user()?->tenant_id;
+        // Falls back to the tenant the platform Super Admin chose in the console.
+        return $request->user()?->tenant_id ?? auth()->user()?->tenant_id ?? $request->attributes->get('tenant_id');
     }
 
     /**

@@ -176,7 +176,9 @@ class TenantPaymentGatewayController extends Controller
 
     private function tenantId(Request $request): int
     {
-        $tenantId = $request->user()?->tenantId();
+        // A tenant user's own tenant; for the platform Super Admin, the tenant
+        // chosen in the console (set by EnsureAuthenticatedTenant).
+        $tenantId = $request->user()?->tenantId() ?? $request->attributes->get('tenant_id');
         abort_if(! $tenantId, Response::HTTP_FORBIDDEN);
 
         return (int) $tenantId;

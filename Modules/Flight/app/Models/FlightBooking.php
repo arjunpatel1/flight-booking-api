@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Str;
 use Modules\Flight\Enums\BookingStatus;
+use Modules\Flight\Enums\HoldStatus;
 use Modules\Flight\Enums\PaymentStatus;
 use Modules\Flight\Enums\TicketStatus;
 use Modules\Saas\Models\Tenant;
@@ -237,6 +238,48 @@ class FlightBooking extends Model
         $statusValue = $status instanceof BookingStatus ? $status->value : $status;
         $query->where('booking_status', $statusValue);
     }
+
+    /**
+     * Unpaid bookings whose seat hold has ended (released, expired, or past its
+     * expiry and not swept yet). Their seats are back on sale, so they are no
+     * longer "waiting for payment". The status is deliberately left as is: a
+     * payment that still arrives re-takes the seat and confirms the booking
+     * (FlightHoldService::convertForPaidBooking), which a final CANCELLED
+     * status would block.
+     */
+    public function scopeHoldEnded(Builder $query): void
+    {
+        $query->whereIn('booking_status', self::UNPAID_OPEN_STATUSES)
+            ->where('payment_status', PaymentStatus::PENDING->value)
+            ->whereHas('hold', fn (Builder $hold) => $hold->where(fn (Builder $ended) => $ended
+                ->whereIn('status', [HoldStatus::RELEASED->value, HoldStatus::EXPIRED->value])
+                ->orWhere(fn (Builder $stale) => $stale
+                    ->where('status', HoldStatus::ACTIVE->value)
+                    ->where('expires_at', '<', now()))));
+    }
+
+    /** Same rule as scopeHoldEnded, for one loaded booking. */
+    public function holdEnded(): bool
+    {
+        if (! in_array($this->booking_status?->value, self::UNPAID_OPEN_STATUSES, true)
+            || $this->payment_status !== PaymentStatus::PENDING) {
+            return false;
+        }
+        $hold = $this->hold;
+        if (! $hold) {
+            return false;
+        }
+
+        return in_array($hold->status, [HoldStatus::RELEASED, HoldStatus::EXPIRED], true)
+            || ($hold->status === HoldStatus::ACTIVE && $hold->expires_at?->isPast());
+    }
+
+    /** Booking statuses before payment, where a hold can still run out. */
+    private const UNPAID_OPEN_STATUSES = [
+        'DRAFT',
+        'QUOTED',
+        'PAYMENT_PENDING',
+    ];
 
     // ── State Machine Transitions ─────────────────────────────────────────────
 

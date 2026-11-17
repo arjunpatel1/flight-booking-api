@@ -608,7 +608,7 @@ class FlightPaymentService
                 // Check distributor / agent active status (suspension check)
                 $this->assertWalletOwnerIsActive($lockedWallet);
 
-                // Check available purchasing power: (balance + credit_limit) - credit_used
+                // Prepaid wallet: the balance must cover the amount (no credit).
                 if ($lockedWallet->available_credit < $payableAmount) {
                     throw new InsufficientBalanceException(
                         requestedAmount: $payableAmount,
@@ -692,11 +692,11 @@ class FlightPaymentService
             'amount'                    => $payableAmount,
             'currency'                  => $currency,
             'status'                    => FlightPaymentStatus::FAILED,
-            'failure_reason'            => 'Insufficient wallet credit',
+            'failure_reason'            => 'Insufficient wallet balance',
             'failed_at'                 => now(),
         ]);
 
-        event(new \Modules\Flight\Events\FlightPaymentFailed($failedPayment, $booking, 'Insufficient wallet balance or credit limit.'));
+        event(new \Modules\Flight\Events\FlightPaymentFailed($failedPayment, $booking, 'Not enough money in the wallet.'));
 
         throw $e;
     }

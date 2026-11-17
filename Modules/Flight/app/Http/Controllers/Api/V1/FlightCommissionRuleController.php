@@ -89,7 +89,8 @@ class FlightCommissionRuleController extends Controller
             'effective_to'           => 'nullable|date',
         ]);
 
-        $data['tenant_id'] = auth()->user()?->tenant_id;
+        // The platform Super Admin saves into the tenant chosen in the console.
+        $data['tenant_id'] = auth()->user()?->tenant_id ?? $request->attributes->get('tenant_id');
         $data['created_by'] = auth()->id();
 
         $rule = FlightCommissionRule::create($data);

@@ -22,10 +22,27 @@ class FlightRouteController extends Controller
     }
 
     /**
+     * Put seats from timed-out holds back on sale before showing seat counts.
+     * The every-minute scheduler does this too, but when it isn't running (or
+     * between runs) admins would otherwise see abandoned holds as sold seats.
+     * Customer search already does the same.
+     */
+    private function releaseExpiredHolds(): void
+    {
+        try {
+            app(\Modules\Flight\Services\Hold\FlightHoldService::class)->expireActiveHolds();
+        } catch (\Throwable $e) {
+            report($e);
+        }
+    }
+
+    /**
      * List tenant flight routes.
      */
     public function index(Request $request): JsonResponse
     {
+        $this->releaseExpiredHolds();
+
         $routes = FlightRoute::query()
             ->with(['originAirport', 'destinationAirport'])
             ->filters($request->all())
@@ -122,6 +139,8 @@ class FlightRouteController extends Controller
      */
     public function show(int $id): JsonResponse
     {
+        $this->releaseExpiredHolds();
+
         $route = FlightRoute::with(['originAirport', 'destinationAirport', 'schedules'])->findOrFail($id);
 
         return ApiResponse::success($route);

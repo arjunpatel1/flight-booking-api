@@ -256,6 +256,8 @@ class FlightBookingController extends Controller
                 'status_label'      => $booking->booking_status->label(),
                 'payment_status'    => $booking->payment_status->value,
                 'payment_label'     => $booking->payment_status->label(),
+                // Unpaid and its seat hold ran out (seat back on sale).
+                'hold_expired'      => $booking->holdEnded(),
                 'payment_reference' => $booking->payment_reference,
                 'total_amount'      => (float) $booking->total_amount,
                 'currency'          => $booking->currency,
@@ -372,6 +374,8 @@ class FlightBookingController extends Controller
                     'status_label'      => $b->booking_status->label(),
                     'payment_status'    => $b->payment_status->value,
                     'payment_label'     => $b->payment_status->label(),
+                    // Unpaid and its seat hold ran out (seat back on sale).
+                    'hold_expired'      => $b->holdEnded(),
                     'total_amount'      => (float) $b->total_amount,
                     'currency'          => $b->currency,
                     'contact_name'      => $b->contact_name,

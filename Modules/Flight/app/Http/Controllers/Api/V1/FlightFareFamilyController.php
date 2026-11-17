@@ -80,7 +80,9 @@ class FlightFareFamilyController extends Controller
      */
     public function store(Request $request): JsonResponse
     {
-        $tenantId = $request->user()?->tenant_id;
+        // A tenant user's own tenant; for the platform Super Admin, the tenant
+        // chosen in the console (set by EnsureAuthenticatedTenant).
+        $tenantId = $request->user()?->tenant_id ?? $request->attributes->get('tenant_id');
 
         $validated = $request->validate([
             'code' => [
@@ -129,7 +131,9 @@ class FlightFareFamilyController extends Controller
             ? FlightFareFamily::findOrFail($identifier)
             : FlightFareFamily::where('code', strtoupper($identifier))->firstOrFail();
 
-        $tenantId = $request->user()?->tenant_id;
+        // A tenant user's own tenant; for the platform Super Admin, the tenant
+        // chosen in the console (set by EnsureAuthenticatedTenant).
+        $tenantId = $request->user()?->tenant_id ?? $request->attributes->get('tenant_id');
 
         $validated = $request->validate([
             'code' => [
